@@ -83,24 +83,39 @@ async function stepBirthdayGender(page, config) {
   log(2, "填写生日和性别...");
   await waitForNavigation(page, "signup/birthdaygender");
 
-  // 选择月份
-  await clickDropdownOption(
-    page,
-    'div[aria-expanded="false"]:near(input[name="day"])',
-    config.birthday.month
-  );
+  // 选择月份 — 使用 JS 点击 section 内的第一个下拉框，避免误击 footer 语言选择器
+  await page.evaluate(() => {
+    const section = document.querySelector("section");
+    const dropdowns = section.querySelectorAll("div[aria-expanded]");
+    if (dropdowns[0]) dropdowns[0].click();
+  });
+  await page.waitForTimeout(1000);
+  await page.evaluate((month) => {
+    const items = document.querySelectorAll("li");
+    for (const li of items) {
+      if (li.textContent.trim() === month) { li.click(); break; }
+    }
+  }, config.birthday.month);
+  await page.waitForTimeout(500);
 
   // 填写日期和年份
   await page.fill('input[name="day"]', config.birthday.day);
   await page.fill('input[name="year"]', config.birthday.year);
 
-  // 选择性别
-  const genderDropdowns = page.locator('div[aria-expanded="false"]');
-  const genderDropdown = genderDropdowns.last();
-  await genderDropdown.click();
+  // 选择性别 — 使用 JS 点击 section 内的第二个下拉框
+  await page.evaluate(() => {
+    const section = document.querySelector("section");
+    const dropdowns = section.querySelectorAll("div[aria-expanded]");
+    if (dropdowns.length >= 2) dropdowns[1].click();
+  });
+  await page.waitForTimeout(1000);
+  await page.evaluate((gender) => {
+    const items = document.querySelectorAll("li");
+    for (const li of items) {
+      if (li.textContent.trim() === gender) { li.click(); break; }
+    }
+  }, config.gender);
   await page.waitForTimeout(500);
-  await page.locator("li").filter({ hasText: config.gender }).first().click();
-  await page.waitForTimeout(300);
 
   await page.click('button:has-text("Next")');
   log(2, `生日: ${config.birthday.month} ${config.birthday.day}, ${config.birthday.year} | 性别: ${config.gender}`);

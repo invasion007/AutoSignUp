@@ -68,7 +68,8 @@ Outlook 注册流程只需要通过人机验证（按住按钮），完全不需
 | 文件 | 语言 | 说明 |
 |------|------|------|
 | `scripts/google-signup.mjs` | Node.js | **主脚本**，支持移动模式（SMS验证）和桌面模式（QR验证） |
-| `scripts/google_register.py` | Python | 通过 CDP 连接浏览器的注册脚本 |
+| `scripts/cdp_mobile_register.py` | Python | **CDP 移动模式脚本** — 已验证可成功获得 SMS 验证（2026-05-24） |
+| `scripts/google_register.py` | Python | 通过 CDP 连接浏览器的桌面模式注册脚本 |
 | `scripts/outlook_register.py` | Python | Outlook 邮箱注册脚本 |
 
 ### 3.3 配置与工具
@@ -240,6 +241,22 @@ with sync_playwright() as p:
 2. **IP 信誉影响** — 数据中心 IP 更容易触发严格验证
 3. **Google 持续更新验证策略** — 本文档中的方法在 2026-05-24 验证有效，未来可能失效
 4. **注册频率限制** — 同一 IP 短时间内多次注册会被阻止
+
+---
+
+## 八、修复记录（2026-05-24 第二次更新）
+
+### Bug: 下拉框选择器误击 footer 语言选择器
+
+**问题**：`google-signup.mjs` 和 `google_register.py` 中使用 `div[aria-expanded="false"]` 选择器选择性别下拉框时，会误击页面 footer 中的语言选择下拉框（也有 `aria-expanded` 属性），导致脚本超时失败。
+
+**修复**：改为使用 `page.evaluate()` + `document.querySelector('section')` 限定在表单区域内查找下拉框，避免 footer 语言选择器干扰。
+
+### 新增: CDP 移动模式脚本 (`cdp_mobile_register.py`)
+
+**功能**：连接运行中的 Chrome 浏览器（CDP 端口 29229），创建 Pixel 7 移动设备模拟上下文，自动完成步骤 1-4，到达 SMS 验证页面。
+
+**验证结果**：已成功运行并到达 `devicephoneverification/consent` 页面（SMS 验证），确认移动模拟方案有效。
 
 ---
 
