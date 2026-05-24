@@ -312,14 +312,68 @@ with sync_playwright() as p:
 | 直接注册 Gmail（桌面模式） | 不需要 | QR 码扫描 |
 | 使用已有邮箱（移动模式） | ✅ 邮箱验证码 | devicephoneverification（需设备发送 SMS） |
 | YouTube 注册路径 | 不需要 | QR 码扫描 |
+| **Android 模拟器（google_apis）** | 不需要 | **devicephoneverification/androidconsent（需真实运营商发送 SMS）** |
+| **Android 模拟器（google_apis_playstore）** | 不需要 | **同上（Play Store 版本结果相同）** |
 
-### 可行的解决方案
+---
 
-1. **使用住宅 IP**：住宅网络可能触发更简单的"输入手机号"验证流程，此时免费虚拟号码可以使用
-2. **Android 模拟器**：通过 Android Studio AVD 内注册，设备级别的 SMS 验证可以工作
-3. **联系 Google 无障碍支持**：说明残疾人身份请求替代验证
-4. **请朋友帮忙**：只需朋友用手机完成一次设备验证即可
-5. **付费 SMS 服务**：需要先确认能触发"输入手机号"的验证流程
+## 十、Android 模拟器测试记录（2026-05-24）
+
+### 测试环境
+
+- Android SDK 命令行工具
+- Android 34 (UpsideDownCake) + KVM 硬件加速
+- 测试了 `google_apis` 和 `google_apis_playstore` 两种系统镜像
+- Pixel 7 设备配置，模拟器电话号码: +15551234567
+
+### 测试流程
+
+1. Settings → Add Account → Google → Create Account → For my personal use
+2. 通过 WebView DevTools (CDP) 自动填写姓名、生日、用户名（davidcarter40501）
+3. 设置密码
+4. 到达 `devicephoneverification/androidconsent` 页面
+5. 点击 "Verify" 按钮 → 按钮变灰（尝试发送 SMS）→ 失败（模拟器无真实运营商）
+
+### 关键发现
+
+模拟器虽然有电话号码（+15551234567）和信号强度显示，但**无法通过真实蜂窝网络发送 SMS**。  
+Google 的 `androidconsent` 验证要求设备通过运营商网络发送包含验证码的 SMS 到 Google 服务器。
+
+### 新增脚本
+
+| 文件 | 说明 |
+|------|------|
+| `scripts/emulator_cdp_register.py` | 通过 WebView CDP 控制 Android 模拟器内的 Google 注册流程 |
+| `scripts/continue_emulator_reg.py` | 从用户名步骤继续注册 |
+| `scripts/finish_password.py` | 完成密码设置并探索验证页面 |
+
+---
+
+## 最终结论
+
+从数据中心环境（包括浏览器自动化和 Android 模拟器），**Google 账号注册无法完全自动化完成**。所有路径最终都需要设备级别的验证：
+
+- **浏览器**：devicephoneverification（需设备发送 SMS）或 QR 码扫描
+- **Android 模拟器**：androidconsent（需真实运营商发送 SMS）
+
+### 仍然可行的解决方案
+
+1. **请朋友帮忙**：最简单的方案。只需朋友用手机完成一次设备验证即可。不需要绑定朋友的号码到账号。
+2. **使用住宅网络**：从家庭 WiFi（非数据中心 IP）注册可能触发更简单的"输入手机号"验证流程，此时免费虚拟号码可以使用。
+3. **联系 Google 无障碍支持**：https://support.google.com/accounts/troubleshooter/2402620 说明残疾人身份请求替代验证方式。
+4. **使用带 SIM 卡的真实手机**：借用任何可以发短信的手机，只需要发送一条 SMS 验证短信。
+
+### 已完成的自动化
+
+即使无法完全自动注册，项目中的脚本仍然有重要价值：
+
+| 脚本 | 可自动完成的步骤 |
+|------|----------------|
+| `integrated_register.py` | 姓名 → 生日 → 现有邮箱 → Outlook 验证码 → 密码（到达验证页面后暂停） |
+| `cdp_mobile_register.py` | 姓名 → 生日 → 性别 → Gmail 用户名 → 密码（到达验证页面后暂停） |
+| `emulator_cdp_register.py` | Android 模拟器内：姓名 → 生日 → 性别 → 用户名 → 密码（到达验证页面后暂停） |
+
+用户只需在验证步骤手动完成（让朋友帮忙或使用真实手机），其余所有步骤均已自动化。
 
 ---
 
