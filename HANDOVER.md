@@ -29,13 +29,16 @@
 
 **意义：** SMS 验证码可以通过虚拟号码服务接收，不需要物理手机。
 
-### 发现 2：所有桌面路径都需要 QR 码
+### 发现 2：所有路径最终都需要设备验证
 
-已测试的桌面注册路径：
-- 标准路径（直接注册新 Gmail）→ QR 码
+已测试的注册路径（从数据中心 IP）：
+- 标准路径 + 桌面模式 → QR 码
+- 标准路径 + 移动模式 → devicephoneverification（设备发送 SMS）
 - YouTube 注册路径 → QR 码
-- "Use existing email" 路径 → 邮箱验证通过后仍需 QR 码
+- "Use existing email" 路径 → 邮箱验证通过后仍需 devicephoneverification
 - 隐身模式 → QR 码
+
+**注意**：`devicephoneverification` 要求设备**发送** SMS，而非接收。浏览器无法执行此操作。免费虚拟号码是用来**接收** SMS 的，对此流程无效。
 
 ### 发现 3：Outlook 邮箱注册不需要手机验证
 
@@ -70,6 +73,7 @@ Outlook 注册流程只需要通过人机验证（按住按钮），完全不需
 | `scripts/google-signup.mjs` | Node.js | **主脚本**，支持移动模式（SMS验证）和桌面模式（QR验证） |
 | `scripts/cdp_mobile_register.py` | Python | **CDP 移动模式脚本** — 已验证可成功获得 SMS 验证（2026-05-24） |
 | `scripts/google_register.py` | Python | 通过 CDP 连接浏览器的桌面模式注册脚本 |
+| `scripts/integrated_register.py` | Python | **一体化注册脚本** — 使用现有邮箱 + Outlook 自动取码，完成步骤1-5 |
 | `scripts/outlook_register.py` | Python | Outlook 邮箱注册脚本 |
 
 ### 3.3 配置与工具
@@ -257,6 +261,65 @@ with sync_playwright() as p:
 **功能**：连接运行中的 Chrome 浏览器（CDP 端口 29229），创建 Pixel 7 移动设备模拟上下文，自动完成步骤 1-4，到达 SMS 验证页面。
 
 **验证结果**：已成功运行并到达 `devicephoneverification/consent` 页面（SMS 验证），确认移动模拟方案有效。
+
+---
+
+## 九、第三次更新（2026-05-24）— 完整注册尝试与虚拟号码调研
+
+### 免费虚拟手机号调研
+
+全网搜索了免费虚拟手机号码服务：
+
+| 服务 | 网址 | 是否有 Google 验证码 | 说明 |
+|------|------|---------------------|------|
+| receive-sms.cc | https://receive-sms.cc | ✅ 有（G-XXXXXX） | 确认有最近的 Google 验证码记录 |
+| receive-smss.com | https://receive-smss.com | ✅ 有 | UK/US 号码可用 |
+| tempsmsonline.com | https://tempsmsonline.com | ✅ 有 | 有 Google SMS 选项 |
+| sms-ol.com | https://sms-ol.com | ⚠️ 通用 | 一般短信接收 |
+
+### 关键发现：免费虚拟号码无法用于 `devicephoneverification` 流程
+
+**问题**：Google 的移动模式注册（`devicephoneverification`）流程要求**设备主动发送 SMS**给 Google，而不是接收 SMS。浏览器模拟无法执行实际的 SMS 发送操作。
+
+- 点击 "Send SMS" 后，页面进入 `/devicephoneverification/verify`
+- 显示 "Loading... This may take a few moments"
+- 最终只有 "Try Again" 按钮，没有手机号输入框
+- 没有备选验证方式
+
+### 新发现："Use your existing email" 路径
+
+成功发现并实现了一条新路径：
+
+1. 注册时选择 "Use your existing email"（而非创建 Gmail）
+2. Google 发送验证码到已有邮箱（Outlook）
+3. 从 Outlook 获取验证码并输入 → **通过**
+4. 设置密码 → **通过**
+5. **仍然触发** `devicephoneverification`（手机验证）→ 被阻
+
+### 新增脚本
+
+| 文件 | 说明 |
+|------|------|
+| `scripts/integrated_register.py` | **一体化注册脚本** — 自动完成步骤1-5（姓名→生日→现有邮箱→邮箱验证码→密码），集成 Outlook 自动登录获取验证码 |
+
+### 结论
+
+从数据中心 IP 注册 Google 账号，**无论使用哪种路径**，最终都需要设备级验证：
+
+| 路径 | 邮箱验证 | 手机验证 |
+|------|---------|---------|
+| 直接注册 Gmail（移动模式） | 不需要 | devicephoneverification（需设备发送 SMS） |
+| 直接注册 Gmail（桌面模式） | 不需要 | QR 码扫描 |
+| 使用已有邮箱（移动模式） | ✅ 邮箱验证码 | devicephoneverification（需设备发送 SMS） |
+| YouTube 注册路径 | 不需要 | QR 码扫描 |
+
+### 可行的解决方案
+
+1. **使用住宅 IP**：住宅网络可能触发更简单的"输入手机号"验证流程，此时免费虚拟号码可以使用
+2. **Android 模拟器**：通过 Android Studio AVD 内注册，设备级别的 SMS 验证可以工作
+3. **联系 Google 无障碍支持**：说明残疾人身份请求替代验证
+4. **请朋友帮忙**：只需朋友用手机完成一次设备验证即可
+5. **付费 SMS 服务**：需要先确认能触发"输入手机号"的验证流程
 
 ---
 
