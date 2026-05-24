@@ -534,4 +534,224 @@ PROXY=socks5://127.0.0.1:10808 npm run signup
 
 ---
 
+---
+
+## 十三、第五次更新（2026-05-24）— Webshare 代理测试 & 虚拟号码方案完善
+
+### Webshare 账号已注册激活
+
+- 账号：`david.carter.2490@outlook.com` / `WebProxy2026!`
+- 网址：https://dashboard.webshare.io
+- 免费计划：10 个代理 + 1GB/月 带宽
+- 验证：邮件验证链接在 Outlook 垃圾邮件文件夹中找到并成功激活
+
+### Webshare 免费代理列表
+
+所有 10 个代理均为**数据中心 IP**（非住宅 IP）：
+- 认证方式：用户名/密码（`tlqpxdpl` / `f2wwmd27mzu1`）
+- 连接方式：HTTP CONNECT
+
+| 地址 | 端口 | 国家 | 城市 | 状态 |
+|------|------|------|------|------|
+| 38.154.203.95 | 5863 | 🇺🇸 US | Piscataway | ✅ Working |
+| 198.105.121.200 | 6462 | 🇬🇧 UK | London | ✅ Working |
+| 64.137.96.74 | 6641 | 🇪🇸 Spain | Madrid | ✅ Working |
+| 209.127.138.10 | 5784 | 🇺🇸 US | Piscataway | ✅ Working |
+| 38.154.185.97 | 6370 | 🇺🇸 US | Piscataway | ✅ Working |
+| 84.247.60.125 | 6095 | 🇵🇱 Poland | Warsaw | ✅ Working |
+| 142.111.67.146 | 5611 | 🇯🇵 Japan | Tokyo | ✅ Working |
+| 194.39.32.164 | 6461 | 🇩🇪 Germany | Frankfurt | ✅ Working |
+| 191.96.254.138 | 6185 | 🇺🇸 US | Los Angeles | ✅ Working |
+| 31.58.9.4 | 6077 | 🇩🇪 Germany | Frankfurt | ✅ Working |
+
+### 本地代理中继（解决 Playwright 认证问题）
+
+Playwright/Chromium 无法直接使用需要认证的 HTTP 代理（`ERR_INVALID_AUTH_CREDENTIALS`）。
+解决方案：创建本地无认证代理中继，自动添加认证头后转发到 Webshare。
+
+```bash
+# 启动本地代理中继（背景运行）
+node scripts/local_proxy.mjs &
+
+# 通过本地代理运行脚本（无需认证）
+PROXY=http://127.0.0.1:18080 node scripts/google-signup.mjs
+```
+
+脚本 `scripts/local_proxy.mjs` 监听 `127.0.0.1:18080`，支持 HTTP 和 HTTPS CONNECT 隧道。
+
+环境变量配置代理上游：
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `UPSTREAM_HOST` | `38.154.203.95` | 上游代理 IP |
+| `UPSTREAM_PORT` | `5863` | 上游代理端口 |
+| `UPSTREAM_USER` | `tlqpxdpl` | 用户名 |
+| `UPSTREAM_PASS` | `f2wwmd27mzu1` | 密码 |
+| `LOCAL_PORT` | `18080` | 本地监听端口 |
+
+### Webshare 代理 Google 注册测试结果
+
+| 代理 | 模式 | 结果 |
+|------|------|------|
+| 38.154.203.95 (US) | 移动 | devicephoneverification（需设备发送 SMS）❌ |
+| 38.154.203.95 (US) | 桌面 | QR 码验证 ❌ |
+
+**结论：Webshare 免费代理都是数据中心 IP，无法绕过手机验证。** 和之前的发现一致。
+
+要使用视频 Method 2 的住宅 IP 方案，需要购买：
+- Webshare Rotating Residential: $3.50/月
+- Webshare Static Residential: $6.00/月
+
+### 脚本更新：虚拟号码流程支持
+
+`scripts/google-signup.mjs` 已更新，新增支持：
+
+1. **`PHONE` 环境变量** — 自动输入虚拟号码
+2. **交互式验证码输入** — 脚本会提示用户输入 Bee-SMS 收到的验证码
+3. **`PROXY_USER` / `PROXY_PASS` 环境变量** — 支持认证代理
+4. **多种验证流程自动识别**：
+   - 情形 A：手机号输入（住宅 IP 下可能出现）→ 自动/手动输入号码 → 等待验证码
+   - 情形 B：设备 SMS（数据中心 IP 下常见）→ 说明问题，等待手动操作
+   - 情形 C：QR 码（桌面模式常见）→ 等待扫码
+   - 情形 D：检测 tel input 兜底处理
+
+### 新增环境变量
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `MOBILE` | `true` | 是否使用移动设备模拟 |
+| `HEADLESS` | `false` | 是否无界面运行 |
+| `PROXY` | （空） | 代理服务器地址 |
+| `PROXY_USER` | （空） | 代理用户名（Playwright 直连时使用） |
+| `PROXY_PASS` | （空） | 代理密码 |
+| `PHONE` | （空） | **新增** — 虚拟号码，如 `+12025551234` |
+
+---
+
+## 十四、最终方案：Bee-SMS 虚拟号码 + 住宅 IP
+
+### 完整操作步骤
+
+**前提条件：** 用户已购买 Bee-SMS 虚拟号码。
+
+#### 方案 1：虚拟号码 + 住宅 IP（推荐，最高成功率）
+
+```bash
+cd AutoSignUp
+
+# 1. 确保依赖已安装
+npm install
+
+# 2. 编辑 config.json（注册信息）
+cp config.example.json config.json
+# 填写 firstName, lastName, birthday, gender, username, password
+
+# 3. 购买住宅代理（选一个）：
+#    - Webshare Rotating Residential: $3.50/月 → dashboard.webshare.io
+#    - IPRoyal: $1.75/GB → iproyal.com
+#    - OkeyProxy: 等待免费试用激活
+
+# 4. 启动本地代理中继（如果代理需要认证）
+UPSTREAM_HOST=<代理IP> UPSTREAM_PORT=<端口> UPSTREAM_USER=<用户名> UPSTREAM_PASS=<密码> node scripts/local_proxy.mjs &
+
+# 5. 运行注册脚本
+PROXY=http://127.0.0.1:18080 PHONE="+1XXXXXXXXXX" node scripts/google-signup.mjs
+
+# 6. 当脚本提示输入验证码时，从 Bee-SMS 获取并输入
+```
+
+#### 方案 2：仅虚拟号码（无住宅 IP，成功率较低）
+
+```bash
+cd AutoSignUp
+
+# 1. 直接运行（移动模式）
+PHONE="+1XXXXXXXXXX" node scripts/google-signup.mjs
+
+# 2. 如果出现 devicephoneverification（要求设备发 SMS）：
+#    → 这意味着数据中心 IP 导致了严格验证
+#    → 需要住宅 IP 才能绕过，见方案 1
+
+# 3. 如果出现手机号输入框：
+#    → 脚本自动输入号码
+#    → 等待验证码并手动输入
+```
+
+### Bee-SMS 使用指南
+
+1. 网址：https://bee-sms.com?ref=KDE4XQJA（视频推荐）
+2. 注册并充值 $2
+3. 选择 "Google" 服务
+4. 选择国家（推荐美国/印度/印尼）
+5. 购买号码 → 获得临时号码（如 `+12025551234`）
+6. 设置 `PHONE` 环境变量为该号码
+7. 运行脚本，到验证码步骤时回 Bee-SMS 查看收到的验证码
+8. 输入验证码完成注册
+
+### 其他虚拟号码平台（备选）
+
+| 平台 | 网址 | 价格 | 说明 |
+|------|------|------|------|
+| Bee-SMS | https://bee-sms.com | $0.30-1.50 | **推荐**，视频验证100%成功 |
+| sms-activate.org | https://sms-activate.org | $0.10-0.50 | 老牌，支持支付宝 |
+| 5sim.net | https://5sim.net | $0.10-0.30 | 界面简洁 |
+
+---
+
+## 十五、文件结构总览（更新版）
+
+```
+AutoSignUp/
+├── README.md
+├── HANDOVER.md                        # 本交接文档
+├── package.json
+├── config.json                        # 注册信息（不推送到 Git）
+├── config.example.json                # 配置模板
+├── .gitignore
+│
+├── scripts/
+│   ├── google-signup.mjs              # [主脚本] 支持移动/桌面/代理/虚拟号码
+│   ├── local_proxy.mjs                # [新增] 本地代理中继（解决认证代理问题）
+│   ├── cdp_mobile_register.py         # Python CDP 移动注册
+│   ├── google_register.py             # Python CDP 桌面注册
+│   ├── integrated_register.py         # 一体化注册（含 Outlook 验证码）
+│   ├── outlook_register.py            # Outlook 注册
+│   ├── emulator_cdp_register.py       # Android 模拟器注册
+│   ├── continue_emulator_reg.py       # 模拟器继续注册
+│   ├── finish_password.py             # 模拟器完成密码
+│   ├── test_proxy.mjs                 # 代理测试（直接认证）
+│   ├── test_proxy2.mjs                # 多代理批量测试
+│   ├── test_proxy_ext.mjs             # Chrome 扩展认证测试
+│   └── test_local_proxy.mjs           # 本地中继代理测试
+│
+├── proxy-extension/                   # Chrome 代理认证扩展（实验性）
+│   ├── manifest.json
+│   └── background.js
+│
+├── docs/
+│   ├── registration-flow.md
+│   ├── FINDINGS.md
+│   └── GOOGLE_注册流程文档.md
+│
+├── skills/
+│   └── SKILL_google_register.md
+│
+├── accounts/
+│   └── ACCOUNTS.md
+│
+└── screenshots/                       # 测试截图
+```
+
+---
+
+## 十六、账号信息汇总
+
+| 服务 | 邮箱 | 密码 | 状态 |
+|------|------|------|------|
+| Outlook | david.carter.2490@outlook.com | Dc$9Kp2x!mR4vN | ✅ 可用 |
+| Webshare | david.carter.2490@outlook.com | WebProxy2026! | ✅ 已激活，10代理可用 |
+| OkeyProxy | david.carter.2490@outlook.com | ProxyTest2026 | ⏳ 激活邮件已收到（可能过期） |
+| Google | — | — | ❌ 卡在验证步骤 |
+
+---
+
 *本文档为完整交接记录，包含所有已知信息和下一步操作指南。*
