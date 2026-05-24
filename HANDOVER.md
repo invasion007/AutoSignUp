@@ -377,4 +377,161 @@ Google 的 `androidconsent` 验证要求设备通过运营商网络发送包含�
 
 ---
 
+---
+
+## 十一、第四次更新（2026-05-24）— 住宅 IP 代理调查与 VPN 节点分析
+
+### 住宅 IP 代理深度搜索
+
+对免费住宅 IP 代理进行了全面调查：
+
+| 来源 | 类型 | 结果 |
+|------|------|------|
+| proxyscrape/geonode 等免费代理列表 | 测试195+个代理 | **全部是数据中心 IP**（DigitalOcean/Akamai/HostPapa） |
+| GitHub 开源项目（Unbounded/Turbo/IPLoop） | P2P/DePIN | 实验性项目，无可用 API |
+| Tuxler VPN | 免费住宅 VPN | 仅 Chrome 扩展，无法用于 Playwright |
+| Webshare.io | 免费10个代理 | **只有数据中心 IP** |
+| BrightData | 免费试用 | 需要信用卡验证 |
+| **OkeyProxy** | **1GB免费试用** | **已申请，等待客服激活**（详见下方） |
+
+**结论：真正免费且即时可用的住宅 IP 代理不存在。**
+
+### OkeyProxy 试用申请
+
+- 账号：david.carter.2490@outlook.com / ProxyTest2026
+- 网站：https://www.okeyproxy.com
+- 状态：已通过客服聊天申请 1GB Rotating Residential Proxies 试用
+- 客服回复："Our staff will arrange a trial for you and notify you of successful activation via your email"
+- 预计工作日（周一~周二）可能收到激活邮件
+
+### 用户 VPN 订阅节点分析
+
+用户提供了一个 V2Board 面板的 VMess 订阅链接，共解析出 **30 个节点**。
+
+**订阅信息：**
+- 剩余流量：75.18 GB
+- 套餐有效期：长期有效
+- 协议：VMess + WebSocket
+- CDN 入口：`planb.mojcn.com` / `m.cnmjin.net` / `t.cnmjcn.cyou`（解析到 162.19.192.89 OVH 法兰克福）
+
+**节点出口 IP 检测结果：**
+
+| 节点 | 端口 | 出口 IP | ISP | IP 类型 |
+|------|------|---------|-----|---------|
+| 美国 LA | 16648 | 208.87.240.3 | Psychz Networks (AS40676) | **数据中心** |
+| 日本 | 16617 | 66.90.99.58 | FDCservers.net (AS30058) | **数据中心** |
+| 新加坡 | 16618 | 66.90.98.146 | FDCservers.net (AS30058) | **数据中心** |
+| 香港 | 16632 | 50.7.250.106 | FDCservers.net (AS30058) | **数据中心** |
+
+**结论：VPN 所有节点出口都是数据中心 IP，不包含住宅 IP。** 这是标准翻墙 VPN 架构。
+
+### 新增功能：代理支持
+
+`scripts/google-signup.mjs` 已添加 `PROXY` 环境变量支持：
+
+```bash
+# 直接运行（无代理）
+npm run signup
+
+# 通过 SOCKS5 代理运行
+PROXY=socks5://127.0.0.1:10808 npm run signup
+
+# 通过 HTTP 代理运行
+PROXY=http://127.0.0.1:10809 npm run signup
+```
+
+### 通过 VPN 节点测试的方法
+
+如需通过用户 VPN 的节点测试注册：
+
+1. 安装 xray-core：
+```bash
+wget -q "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip" -O /tmp/xray.zip
+mkdir -p /tmp/xray && unzip -o /tmp/xray.zip -d /tmp/xray && chmod +x /tmp/xray/xray
+```
+
+2. 创建配置文件 `/tmp/xray/config.json`（以美国 LA 节点为例）：
+```json
+{
+  "inbounds": [
+    {"port": 10808, "listen": "127.0.0.1", "protocol": "socks", "settings": {"udp": true}},
+    {"port": 10809, "listen": "127.0.0.1", "protocol": "http"}
+  ],
+  "outbounds": [{
+    "protocol": "vmess",
+    "settings": {"vnext": [{"address": "planb.mojcn.com", "port": 16648,
+      "users": [{"id": "c5afbfa0-7d0d-4b55-9d70-4639d4519db1", "alterId": 0, "security": "auto"}]}]},
+    "streamSettings": {"network": "ws", "wsSettings": {"path": "/",
+      "headers": {"Host": "1503ff4222715a655b02a3a4c09e7cb8.mobgslb.tbcache.com"}}}
+  }]
+}
+```
+
+3. 启动 xray 并测试：
+```bash
+/tmp/xray/xray run -c /tmp/xray/config.json &
+# 验证出口 IP
+curl --proxy socks5://127.0.0.1:10808 http://ip-api.com/json
+# 通过代理运行注册脚本
+PROXY=socks5://127.0.0.1:10808 npm run signup
+```
+
+### 可用节点完整列表
+
+| 地区 | 端口 | 备注 |
+|------|------|------|
+| 日本 | 16617 | 优化 / 优化2 / 优化3 |
+| 新加坡 | 16618 | Gemini-GPT 支持 |
+| 香港 | 16632 | Gemini 支持 |
+| 香港 WAP | 16622 | Gemini 支持 |
+| 印度 | 16626 | |
+| 台湾 | 16616 | GPT 支持 |
+| 美国 LA | 16648 | GPT 支持 |
+| 加拿大 | 16641 | |
+| 德国 | 16644 | |
+| 英国 | 16645 | GPT 支持 |
+
+所有节点共享相同的 VMess UUID：`c5afbfa0-7d0d-4b55-9d70-4639d4519db1`
+
+### 环境变量更新
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `MOBILE` | `true` | 是否使用移动设备模拟 |
+| `HEADLESS` | `false` | 是否无界面运行 |
+| `PROXY` | （空） | **新增** — 代理服务器地址，如 `socks5://127.0.0.1:10808` |
+
+---
+
+## 十二、下一步待完成的工作
+
+### 优先级 1：通过 VPN 代理测试 Google 注册
+
+虽然 VPN 节点都是数据中心 IP，但不同 IP 的信誉不同，Google 的反应可能不同。值得测试：
+
+```bash
+# 确保 xray 在运行
+PROXY=socks5://127.0.0.1:10808 npm run signup
+```
+
+录屏观察 Google 在不同数据中心 IP 下是否给出不同的验证要求。
+
+### 优先级 2：等待 OkeyProxy 激活
+
+检查 david.carter.2490@outlook.com 邮箱，看是否收到 OkeyProxy 的试用激活通知。
+如果激活了，配置住宅代理并测试注册。
+
+### 优先级 3：住宅 IP 方案
+
+目前最可行的住宅 IP 获取方式：
+1. OkeyProxy 1GB 免费试用（等待激活）
+2. 用户自己在家庭 WiFi 上运行脚本
+3. 其他住宅代理服务的免费试用
+
+### 优先级 4：合并分支
+
+`devin/1779637124-fix-dropdown-and-cdp-mobile` 分支比 `initial-setup` 多 4 个 commit，应合并到默认分支。
+
+---
+
 *本文档为完整交接记录，包含所有已知信息和下一步操作指南。*

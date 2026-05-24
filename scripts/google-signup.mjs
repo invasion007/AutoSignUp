@@ -256,10 +256,17 @@ async function main() {
     console.log("");
   }
 
-  const browser = await chromium.launch({
+  const proxyServer = process.env.PROXY || "";
+  const launchOptions = {
     headless,
     args: ["--no-sandbox", "--disable-blink-features=AutomationControlled"],
-  });
+  };
+  if (proxyServer) {
+    launchOptions.proxy = { server: proxyServer };
+    console.log(`代理: ${proxyServer}`);
+  }
+
+  const browser = await chromium.launch(launchOptions);
 
   const contextOptions = useMobile
     ? {
