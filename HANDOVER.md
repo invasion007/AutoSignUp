@@ -1,6 +1,6 @@
-# 交接文档 — Google 账号自动注册项目
+# 交接文档 — 自动注册与订阅项目
 
-> 最后更新: 2026-05-24  
+> 最后更新: 2026-05-25  
 > 仓库: https://github.com/invasion007/AutoSignUp  
 > 分支: `initial-setup`
 
@@ -244,3 +244,79 @@ with sync_playwright() as p:
 ---
 
 *本文档为完整交接记录，包含所有已知信息和下一步操作指南。*
+
+---
+
+## 八、ChatGPT Plus 订阅自动化（2026-05-25 新增）
+
+### 8.1 背景
+
+用户已成功注册 ChatGPT 免费账号，现需要升级为 Plus 订阅（$20/月）。  
+由于用户无法使用鼠标/键盘，需要自动化完成 Stripe Checkout 支付流程。
+
+### 8.2 实现方案
+
+创建了两个自动化脚本：
+
+| 文件 | 语言 | 说明 |
+|------|------|------|
+| `scripts/chatgpt-plus-subscribe.mjs` | Node.js | 完整订阅脚本（支持独立浏览器和 CDP 模式） |
+| `scripts/chatgpt_plus_subscribe.py` | Python | CDP 版本（连接已登录的浏览器） |
+
+### 8.3 订阅流程
+
+```
+Step 1: 确认已登录 ChatGPT
+Step 2: 导航到 chatgpt.com/#pricing
+Step 3: 点击 "Get Plus" / "Upgrade to Plus"
+Step 4: 跳转到 Stripe Checkout (pay.openai.com)
+Step 5: 填写支付信息（卡号、有效期、CVC、姓名、国家、邮编）
+Step 6: 提交订阅（默认等待 30 秒确认）
+Step 7: 验证订阅成功
+```
+
+### 8.4 配置
+
+在 `config.json` 中添加 `payment` 字段：
+
+```json
+{
+  "payment": {
+    "email": "your-email@gmail.com",
+    "cardNumber": "卡号",
+    "expiry": "MM/YY",
+    "cvc": "安全码",
+    "cardholderName": "持卡人姓名",
+    "country": "国家",
+    "postalCode": "邮编"
+  }
+}
+```
+
+### 8.5 npm 命令
+
+| 命令 | 说明 |
+|------|------|
+| `npm run subscribe` | 标准模式（启动新浏览器） |
+| `npm run subscribe:cdp` | CDP 模式（连接已登录浏览器，推荐） |
+| `npm run subscribe:auto` | 自动提交（跳过确认等待） |
+| `npm run subscribe:headless` | 无界面模式 |
+
+### 8.6 参考的开源项目
+
+| 项目 | 说明 |
+|------|------|
+| [zxyyang/plus_gopay_gptp-plus](https://github.com/zxyyang/plus_gopay_gptp-plus) | ChatGPT Plus PayPal 通道批量工具 |
+| [DanOps-1/Gpt-Agreement-Payment](https://github.com/DanOps-1/Gpt-Agreement-Payment) | Stripe Checkout 协议端到端重放 |
+
+### 8.7 注意事项
+
+- **支付信息安全**: config.json 包含敏感支付数据，已在 .gitignore 中排除
+- **CDP 模式推荐**: 先在真实浏览器中登录 ChatGPT，再用 CDP 连接
+- **Stripe 反自动化**: 如遇问题，使用 CDP 模式手动辅助
+- **价格**: ChatGPT Plus $20/月（2026年5月）
+
+### 8.8 相关文档
+
+- `docs/CHATGPT_PLUS_订阅流程文档.md` — 完整技术文档（URL、选择器、支付字段）
+- `skills/SKILL_chatgpt_plus_subscribe.md` — 可复用的技能文档

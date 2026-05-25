@@ -1,11 +1,89 @@
-# AutoSignUp - Google 账号自动注册工具
+# AutoSignUp - 自动注册与订阅工具
 
 ## 项目说明
 
-本项目记录并自动化 Google 账号注册流程，专为无法使用鼠标/键盘的用户设计。  
+本项目记录并自动化账号注册和订阅流程，专为无法使用鼠标/键盘的用户设计。  
 提供 **Python (Playwright CDP)** 和 **Node.js (Playwright)** 两种实现。
 
-## 当前状态
+### 功能模块
+
+| 模块 | 说明 | 状态 |
+|------|------|------|
+| Google 账号注册 | 自动化 Google 注册流程（移动模式 SMS 验证） | 已完成 |
+| Outlook 邮箱注册 | 自动化 Outlook 注册流程（无需手机） | 已完成 |
+| **ChatGPT Plus 订阅** | **自动化 ChatGPT Plus 升级/订阅（Stripe 支付）** | **新增** |
+
+---
+
+## ChatGPT Plus 订阅
+
+### 订阅流程概览
+
+| 步骤 | 页面 | 内容 | 自动化 |
+|------|------|------|--------|
+| 1 | `chatgpt.com` | 确认已登录 | 可自动 / CDP |
+| 2 | `chatgpt.com/#pricing` | 导航到升级页面 | 可自动 |
+| 3 | 选择 Plus 计划 | 点击 "Get Plus" | 可自动 |
+| 4 | `pay.openai.com` | Stripe Checkout 支付 | 可自动 |
+| 5 | 填写信用卡信息 | 卡号/有效期/CVC | 可自动 |
+| 6 | 提交订阅 | 确认支付 | 可自动 |
+| 7 | 验证 Plus 状态 | 确认订阅成功 | 可自动 |
+
+### 使用方法
+
+```bash
+# 安装依赖
+npm install
+npx playwright install chromium
+
+# 配置信息（包含支付信息）
+cp config.example.json config.json
+# 编辑 config.json 填写你的支付信息
+
+# 运行 — 标准模式
+npm run subscribe
+
+# 运行 — CDP 模式（连接已登录的浏览器，推荐）
+npm run subscribe:cdp
+
+# 运行 — 自动提交（跳过 30 秒确认等待）
+npm run subscribe:auto
+
+# 运行 — Python CDP 版本
+python scripts/chatgpt_plus_subscribe.py
+python scripts/chatgpt_plus_subscribe.py --auto-submit
+```
+
+### 配置说明
+
+在 `config.json` 中添加 `payment` 字段：
+
+```json
+{
+  "payment": {
+    "email": "your-email@gmail.com",
+    "cardNumber": "4242424242424242",
+    "expiry": "12/28",
+    "cvc": "123",
+    "cardholderName": "YOUR NAME",
+    "country": "United States",
+    "postalCode": "10001"
+  }
+}
+```
+
+### 参考项目
+
+| 项目 | 说明 |
+|------|------|
+| [zxyyang/plus_gopay_gptp-plus](https://github.com/zxyyang/plus_gopay_gptp-plus) | ChatGPT Plus PayPal 通道自动化 |
+| [DanOps-1/Gpt-Agreement-Payment](https://github.com/DanOps-1/Gpt-Agreement-Payment) | 协议端到端重放工具集 |
+
+---
+
+## Google 账号注册
+
+### 当前状态
 
 | 步骤 | 桌面模式 | 移动模式（推荐） |
 |------|----------|-----------------|
@@ -15,85 +93,18 @@
 | 4. 设置密码 | 已自动化 | 已自动化 |
 | 5. 验证 | QR 码（需物理手机） | **SMS 短信验证** |
 
-## 重要发现
+### 重要发现
 
-### 移动设备模拟可绕过 QR 码验证（2026年5月验证）
+**移动设备模拟可绕过 QR 码验证（2026年5月验证）**
 
-**关键发现**：使用 Playwright 的移动设备模拟（如 Pixel 7）注册时，Google 会切换到 **SMS 短信验证**，而不是 QR 码扫描验证！
+使用 Playwright 的移动设备模拟（Pixel 7）注册时，Google 会切换到 **SMS 短信验证**。SMS 验证码可以通过虚拟号码服务接收。
 
 | 注册方式 | 验证类型 | 验证页面 URL |
 |----------|----------|-------------|
 | 桌面浏览器 | QR 码扫描 | `/signup/mophoneverification` 或 `/crossflowverification` |
 | 移动设备模拟 | SMS 短信 | `/devicephoneverification/consent` |
 
-SMS 短信验证可以通过虚拟号码服务（如 sms-activate.org、5sim.net）接收，不需要物理手机。
-
-### 触发 QR 码验证的因素
-
-根据调研，以下因素会增加被要求 QR 码验证的概率：
-- 可疑 IP 地址（数据中心IP、VPN、被标记的公共IP）
-- 同一设备/网络多次注册
-- 地理位置/时区/浏览器语言不匹配
-- 无浏览历史和 cookies 的干净环境
-- 虚拟机或模拟器特征被检测到
-
-### 降低验证要求的方法
-
-1. **使用移动设备模拟**（本项目默认方式）— 获得 SMS 验证而非 QR 码
-2. **通过 YouTube 注册** — YouTube 的验证检查通常比 Gmail 宽松
-3. **使用隐身模式** — 清洁的浏览器环境
-4. **匹配 IP 地区的浏览器语言** — 如用美国 IP 则设置 English (US)
-5. **提供恢复邮箱** — 有时可以增加出现 "Skip" 按钮的概率
-
-### "Use existing email" 路径测试结果
-
-- **路径**: 注册时选择 "Use your existing email" 而非创建新 Gmail
-- **结果**: 邮箱验证码通过后，桌面模式仍需 QR 码验证
-- **移动模式**: 可能获得 SMS 验证
-
----
-
-## 注册流程概览
-
-| 步骤 | 页面 | 内容 | 自动化 |
-|------|------|------|--------|
-| 1 | `/signup/name` | 输入姓名 | 可自动 |
-| 2 | `/signup/birthdaygender` | 选择生日和性别 | 可自动 |
-| 3 | `/signup/username` | 选择用户名 | 可自动 |
-| 4 | `/signup/password` | 设置密码 | 可自动 |
-| 5 | `/devicephoneverification` | SMS 短信验证（移动模式） | 需虚拟号码 |
-| 5 | `/mophoneverification` | QR 码验证（桌面模式） | 需手动 |
-| 6 | （验证后）| 添加恢复邮箱（可选） | 可自动 |
-| 7 | （验证后）| 同意服务条款 | 可自动 |
-
----
-
-## 文件结构
-
-```
-AutoSignUp/
-├── README.md                         # 本文件
-├── package.json                      # Node.js 依赖
-├── config.example.json               # Node.js 脚本配置示例
-├── docs/
-│   ├── GOOGLE_注册流程文档.md         # 完整注册流程文档
-│   ├── FINDINGS.md                   # 探索发现和结论
-│   └── registration-flow.md          # 详细流程文档（含选择器和URL信息）
-├── scripts/
-│   ├── google_register.py            # Python 注册自动化脚本 (CDP)
-│   ├── outlook_register.py           # Outlook 注册自动化脚本 (辅助)
-│   └── google-signup.mjs             # Node.js Playwright 注册脚本
-├── skills/
-│   └── SKILL_google_register.md      # 技能文档供复用
-└── accounts/
-    └── ACCOUNTS.md                   # 已创建的测试账号信息
-```
-
----
-
-## 使用方法
-
-### 方式一: Node.js 移动模式（推荐）
+### 使用方法
 
 ```bash
 # 安装依赖
@@ -102,19 +113,19 @@ npx playwright install chromium
 
 # 配置信息
 cp config.example.json config.json
-# 编辑 config.json 填写你的信息
+# 编辑 config.json 填写注册信息
 
-# 运行（移动模式，推荐 — 使用 SMS 验证）
+# 运行（移动模式，推荐 — SMS 验证）
 npm run signup
 
-# 运行（桌面模式 — 使用 QR 码验证）
+# 运行（桌面模式 — QR 码验证）
 MOBILE=false npm run signup
 
 # 运行（无界面模式）
 npm run signup:headless
 ```
 
-### 方式二: Python 脚本 (通过 CDP 连接已打开的 Chrome)
+### Python 脚本 (CDP)
 
 ```bash
 pip install playwright
@@ -126,20 +137,43 @@ python scripts/google_register.py \
   --use-existing-email
 ```
 
-### 验证步骤说明
+---
 
-**移动模式（推荐）**：脚本到达验证页面时会提示使用虚拟号码服务接收 SMS 验证码。
+## 文件结构
 
-**桌面模式**：脚本到达 QR 码验证页面时会暂停等待手动扫码。
+```
+AutoSignUp/
+├── README.md                              # 本文件
+├── HANDOVER.md                            # 交接文档
+├── package.json                           # Node.js 依赖和脚本
+├── config.example.json                    # 配置模板（含支付信息）
+├── docs/
+│   ├── GOOGLE_注册流程文档.md              # Google 注册流程文档
+│   ├── CHATGPT_PLUS_订阅流程文档.md        # ChatGPT Plus 订阅流程文档
+│   ├── FINDINGS.md                        # 探索发现和结论
+│   └── registration-flow.md               # 详细流程文档
+├── scripts/
+│   ├── google-signup.mjs                  # Google 注册脚本 (Node.js)
+│   ├── google_register.py                 # Google 注册脚本 (Python CDP)
+│   ├── outlook_register.py                # Outlook 注册脚本 (Python)
+│   ├── chatgpt-plus-subscribe.mjs         # ChatGPT Plus 订阅脚本 (Node.js)
+│   └── chatgpt_plus_subscribe.py          # ChatGPT Plus 订阅脚本 (Python CDP)
+├── skills/
+│   ├── SKILL_google_register.md           # Google 注册技能文档
+│   └── SKILL_chatgpt_plus_subscribe.md    # ChatGPT Plus 订阅技能文档
+└── accounts/
+    └── ACCOUNTS.md                        # 已创建的账号信息
+```
 
 ---
 
 ## 注意事项
 
-- Google 可能会根据 IP 地址、浏览器指纹等因素改变验证要求
 - 请勿将 `config.json` 提交到版本控制（已在 `.gitignore` 中排除）
-- 本工具仅供个人辅助使用，请遵守 Google 服务条款
+- 本工具仅供个人辅助使用，请遵守相关服务条款
+- 支付信息为敏感数据，请妥善保管
 - 移动模式使用 Playwright 的 `devices["Pixel 7"]` 配置进行设备模拟
+- 推荐使用 CDP 模式连接已登录的真实浏览器
 
 ## 建议的虚拟号码服务
 
@@ -147,13 +181,6 @@ python scripts/google_register.py \
 - [sms-activate.org](https://sms-activate.org)
 - [5sim.net](https://5sim.net)
 - [onlinesim.io](https://onlinesim.io)
-
-## 建议的下一步
-
-1. **尝试虚拟号码服务**: 配合移动模式脚本完成完整注册
-2. **联系 Google 无障碍支持**: https://support.google.com/accounts/troubleshooter/2402620
-3. **请他人协助验证**: 验证不会绑定手机号到新账号
-4. **考虑 Google Workspace**: 企业版可能有不同的验证流程
 
 ## License
 

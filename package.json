@@ -5,7 +5,11 @@
   "type": "module",
   "scripts": {
     "signup": "node scripts/google-signup.mjs",
-    "signup:headless": "HEADLESS=true node scripts/google-signup.mjs"
+    "signup:headless": "HEADLESS=true node scripts/google-signup.mjs",
+    "subscribe": "node scripts/chatgpt-plus-subscribe.mjs",
+    "subscribe:cdp": "CDP=true node scripts/chatgpt-plus-subscribe.mjs",
+    "subscribe:headless": "HEADLESS=true node scripts/chatgpt-plus-subscribe.mjs",
+    "subscribe:auto": "AUTO_SUBMIT=true node scripts/chatgpt-plus-subscribe.mjs"
   },
   "dependencies": {
     "playwright": "^1.52.0"
