@@ -114,6 +114,46 @@ PROXY=http://127.0.0.1:18080 node auto_register_stealth.mjs
 }
 ```
 
+## ChatGPT 注册 (已成功)
+
+### 注册成功记录 (2026-05-25)
+
+| 项目 | 内容 |
+|------|------|
+| **邮箱** | david.carter.2490@outlook.com |
+| **登录方式** | 邮箱验证码 (无密码) |
+| **代理** | socks5://98.182.147.97:4145 (Cox Communications, Las Vegas) |
+| **代理来源** | ProxyScrape 免费 SOCKS5 API |
+
+### 免费住宅IP代理方案
+
+**关键发现**: ChatGPT 用 Cloudflare 保护，只有住宅IP能通过。
+
+免费代理列表 API:
+```
+https://api.proxyscrape.com/v2/?request=displayproxies&protocol=socks5&timeout=10000&country=US
+```
+
+验证IP类型:
+```bash
+curl -x socks5://<ip>:<port> http://ip-api.com/json
+# 查看 isp 字段，住宅IP = Cox, Comcast, AT&T, Spectrum 等
+```
+
+### ChatGPT 注册命令
+```bash
+PROXY=socks5://<住宅IP>:<端口> EMAIL=david.carter.2490@outlook.com node scripts/chatgpt-signup.mjs
+```
+
+### 相关文件
+| 文件 | 说明 |
+|------|------|
+| `scripts/chatgpt-signup.mjs` | ChatGPT 注册自动化脚本 |
+| `docs/CHATGPT_注册流程文档.md` | 完整注册流程文档 |
+| `accounts/ACCOUNTS.md` | 已注册账号信息 |
+
+---
+
 ## 参考视频
 - 红孩儿教程: https://youtu.be/foaZG87pUv8
 - 方法: AdsPower 指纹浏览器 + Webshare 静态住宅 IP + Bee-SMS/Hero-SMS
