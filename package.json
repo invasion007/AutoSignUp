@@ -1,15 +1,23 @@
 {
   "name": "auto-sign-up",
-  "version": "1.0.0",
-  "description": "Google 账号自动注册工具 - 使用 Playwright 自动化注册流程",
+  "version": "1.1.0",
+  "description": "Google 账号自动注册 + ChatGPT Plus 订阅自动化工具",
   "type": "module",
   "scripts": {
     "signup": "node scripts/google-signup.mjs",
-    "signup:headless": "HEADLESS=true node scripts/google-signup.mjs"
+    "signup:headless": "HEADLESS=true node scripts/google-signup.mjs",
+    "login": "node scripts/chatgpt-login.mjs",
+    "login:cdp": "CDP=true node scripts/chatgpt-login.mjs",
+    "subscribe": "node scripts/chatgpt-plus-subscribe.mjs",
+    "subscribe:cdp": "CDP=true node scripts/chatgpt-plus-subscribe.mjs",
+    "subscribe:card": "PAYMENT=card node scripts/chatgpt-plus-subscribe.mjs",
+    "subscribe:card:cdp": "CDP=true PAYMENT=card node scripts/chatgpt-plus-subscribe.mjs",
+    "subscribe:headless": "HEADLESS=true node scripts/chatgpt-plus-subscribe.mjs",
+    "subscribe:auto": "AUTO_SUBMIT=true node scripts/chatgpt-plus-subscribe.mjs"
   },
   "dependencies": {
     "playwright": "^1.52.0"
   },
-  "keywords": ["google", "signup", "automation", "playwright", "accessibility"],
+  "keywords": ["google", "chatgpt", "signup", "subscription", "automation", "playwright", "accessibility"],
   "license": "MIT"
 }
