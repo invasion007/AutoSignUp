@@ -221,17 +221,169 @@ PROXY=http://127.0.0.1:18080 node auto_register_stealth.mjs
 
 ---
 
-## 后续工作方向
+## 最新测试结果 (2026-05-25)
 
-### 短期
-1. **Google 注册**: 用住宅IP + 移动模式测试，看能否拿到 SMS 验证而非 QR 码
-2. **自动化验证码**: 集成 Outlook Graph API 自动读取 ChatGPT 验证码邮件
-3. **代理池**: 自动从 ProxyScrape 获取并筛选住宅IP，维护可用代理池
+### 测试 1: 改进版脚本 + Cox 住宅IP + 移动模式
 
-### 长期
-1. **批量注册**: 结合多个 Outlook 邮箱实现批量 ChatGPT 注册
-2. **稳定代理**: 评估付费住宅代理 (IPRoyal $1.75/GB, Webshare Static Residential)
-3. **完全自动化**: 去掉验证码手动输入步骤
+| 配置 | 值 |
+|------|-----|
+| 脚本 | `scripts/google-register-with-proxy.mjs` (新增) |
+| 代理 | `socks5://98.182.147.97:4145` (Cox, Las Vegas) |
+| 模式 | Pixel 7 移动设备模拟 |
+| 结果 | **步骤1-4成功，步骤5到达 `devicephoneverification`** |
+
+**分析**: Cox IP 98.182.147.97 已被 Google 标记（多次注册使用），触发 `devicephoneverification`（设备需发送SMS）而非普通 `phoneverification`（接收SMS）。
+
+### 测试 2: Stealth 指纹模式 + Cox 住宅IP
+
+| 配置 | 值 |
+|------|-----|
+| 脚本 | `auto_register_stealth.mjs` |
+| 代理 | `socks5://98.182.147.97:4145` (Cox, Las Vegas) |
+| 模式 | Pixel 7 + stealth 指纹伪装 |
+| 结果 | **"Sorry, we could not create your Google Account" 错误** |
+
+**分析**: Google 的反自动化检测更强，stealth 模式可能触发了额外的风控规则。
+
+### 关键发现: `devicephoneverification` vs `phoneverification`
+
+| 验证类型 | URL 特征 | 含义 | 能否用虚拟号码 |
+|----------|---------|------|--------------|
+| 普通SMS | `/phoneverification` (无 device 前缀) | Google **发送** SMS 给你 | ✅ 可以 |
+| 设备SMS | `/devicephoneverification` | 你的设备**发送** SMS 给 Google | ❌ 不可以 |
+| QR 码 | `/mophoneverification` | 需要物理手机扫码 | ❌ 不可以 |
+
+**结论**: 只有普通 `phoneverification` 才能用虚拟号码完成。需要一个**未被 Google 标记**的新鲜住宅 IP 才能获得此验证类型。
+
+---
+
+## 新增脚本 (2026-05-25)
+
+| 文件 | 用途 |
+|------|------|
+| `scripts/google-register-with-proxy.mjs` | 自动发现住宅代理 + 移动模式注册 (推荐) |
+| `scripts/find-residential-proxy.mjs` | 独立的住宅代理发现工具 |
+
+### 使用新脚本
+
+```bash
+# 自动发现住宅IP并注册
+node scripts/google-register-with-proxy.mjs
+
+# 指定代理
+PROXY=socks5://ip:port node scripts/google-register-with-proxy.mjs
+
+# 无头模式
+HEADLESS=true PROXY=socks5://ip:port node scripts/google-register-with-proxy.mjs
+
+# 单独查找住宅代理
+node scripts/find-residential-proxy.mjs
+node scripts/find-residential-proxy.mjs --max 50
+```
+
+---
+
+## 最新测试结果 (2026-05-25 续)
+
+### 重大发现: "使用现有邮箱" 注册路径
+
+**关键突破**: 在注册步骤3选择 "Use your existing email" 而非创建 Gmail 地址时:
+- Google 发送验证码到现有邮箱 (Outlook) → **邮箱验证可完全自动化**
+- 流程: 姓名 → 生日 → 使用现有邮箱 → **邮箱验证码** → 密码 → 手机验证
+
+**自动化完成的步骤** (Steps 1-5):
+| 步骤 | 内容 | 状态 |
+|------|------|------|
+| 1 | 姓名 | ✅ 自动 |
+| 2 | 生日+性别 | ✅ 自动 |
+| 3 | 使用现有邮箱 (Outlook) | ✅ 自动 |
+| 4 | 邮箱验证码 (从Outlook读取) | ✅ 自动 |
+| 5 | 设置密码 | ✅ 自动 |
+| 6 | 手机验证 (发SMS到96831) | ⚠️ 需用户发一条短信 |
+
+### 关键发现: 验证类型全面测试
+
+| IP来源 | 模式 | 验证类型 | 结论 |
+|--------|------|----------|------|
+| Cox (5个不同城市) | 移动 | devicephoneverification | 均为发送SMS |
+| Performive (Beverly Hills) | 移动 | devicephoneverification | 同上 |
+| Performive (Beverly Hills) | 桌面 | mophoneverification | QR码 |
+| Cox (Roanoke) | 桌面 | mophoneverification | QR码 |
+| PacketExchange | 桌面 | BLOCKED | 被拒绝 |
+| AWS 直连 | 桌面 | mophoneverification | QR码 |
+| Total Server Solutions | 移动 | devicephoneverification | 同上 |
+
+**结论**: 2026年Google注册，所有美国住宅IP均无法获得 `phoneverification`。
+- 移动模式 → 必定 `devicephoneverification` (需发送SMS到96831)
+- 桌面模式 → 必定 `mophoneverification` (QR码→仍是发SMS)
+- QR码解码后URL: `devicephoneverification/start` (与手机端相同)
+
+### devicephoneverification 详情
+
+点击 "Send SMS" 后触发的 SMS intent:
+```
+sms://96831?body=Send this message without editing. (UNIQUE_CODE)
+```
+- 目标短号: `96831` (Google 美国短代码)
+- 消息内容: 包含唯一验证码
+- **只有真实运营商号码可以发送到短代码** (VoIP/虚拟号码无法发送)
+
+## 后续工作方向 (2026-05-25 更新)
+
+### ⚠️ 核心发现 (最新)
+
+经过 20+ 种 IP/UA/模式组合测试，确认：
+- **Google 验证类型完全由 IP 信任分数决定**（不是浏览器指纹）
+- **所有 ProxyScrape 免费代理都被标记**为低信任，始终触发 `devicephoneverification`
+- **sms-activate.org 已关闭**（2025年12月停止运营）
+- **TextNow 网页注册已关闭**（只能通过APP注册）
+- **AdsPower/Multilogin 2026文档确认**: 只有私有/干净住宅IP才能获得 `phoneverification` 或跳过手机验证
+
+### 最终方案: Android 模拟器 + TextNow APP
+
+**详细技术方案见**: `docs/GOOGLE_REGISTRATION_PLAN.md`
+
+```
+方案架构:
+Playwright (Steps 1-5) ──→ Android Emulator (TextNow) ──→ 发SMS到96831
+                                                                  ↓
+                         Google注册完成 ◀────────── 验证通过 ◀────┘
+```
+
+**三层保险:**
+1. 免费: Android模拟器 + TextNow/Talkatone/FreeTone
+2. 低成本 (~$2): IPRoyal住宅代理 + hero-sms接收验证码
+3. 最可靠: 5sim.net 购买发送SMS号码
+
+**服务器环境已确认**: KVM可用、96GB磁盘、8GB内存 — 可运行Android模拟器
+
+### 实施清单
+
+- [ ] 安装 Android SDK + 模拟器 (15分钟)
+- [ ] 下载 TextNow APK 并安装到模拟器
+- [ ] 注册 TextNow 获取免费美国号码
+- [ ] 测试: TextNow 能否发送SMS到短代码96831
+- [ ] 如能发送 → 运行完整注册脚本
+- [ ] 如不能 → 切换备选方案
+
+---
+
+## 验证类型全面测试记录 (2026-05-25)
+
+| # | IP/ISP | 模式 | UA | 指纹 | 结果 |
+|---|--------|------|-----|------|------|
+| 1 | Cox Pensacola (184.181.217.210) | 桌面 | Chrome 131 | WebRTC禁用+全指纹 | mophoneverification (QR) |
+| 2 | Cox Pensacola (184.181.217.201) | 桌面 | Chrome 131 | 最小化 | mophoneverification (QR) |
+| 3 | Cox Pensacola (174.75.211.193) | 桌面 | Chrome 131 | Puppeteer Stealth | BLOCKED |
+| 4 | Cox (98.188.47.132) | 桌面 | Chrome 131 | 基本 | mophoneverification (QR) |
+| 5 | Cox (98.188.47.132) | 移动 | Pixel 7 | 基本 | devicephoneverification |
+| 6 | Cox (70.166.167.55) | 移动/WebView | Pixel 8 Pro | Android模拟 | devicephoneverification |
+| 7 | Performive Beverly Hills | 桌面 | Chrome 131 | 全指纹 | BLOCKED |
+| 8 | AWS直连 (54.69.238.189) | 系统Chrome | 真实Chrome | 无自动化 | mophoneverification (QR) |
+| 9 | 多IP | 移动 | Chrome 100 | 全指纹 | crossflow → BLOCKED |
+| 10 | 多IP | 移动 | Firefox/iPad | 全指纹 | mophoneverification (QR) |
+
+**结论**: 桌面模式→QR码，移动模式→deviceSMS，两者都不是我们需要的 `phoneverification`
 
 ---
 
@@ -242,3 +394,6 @@ PROXY=http://127.0.0.1:18080 node auto_register_stealth.mjs
 - ip-api.com IP查询: http://ip-api.com/json
 - Playwright 文档: https://playwright.dev/docs/api/class-browsertype#browser-type-launch
 - Hero-SMS API: https://hero-sms.com
+- AdsPower 2026无手机注册: https://www.adspower.com/blog/register-gmail-account-without-phone-number
+- Multilogin QR绕过: https://multilogin.com/blog/verify-some-info-before-creating-an-account/
+- YingTu 2026注册指南: https://yingtu.ai/en/blog/us-google-account-registration-guide

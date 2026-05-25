@@ -96,6 +96,7 @@ async function main() {
       "--disable-blink-features=AutomationControlled",
       "--disable-features=IsolateOrigins,site-per-process",
       "--disable-site-isolation-trials",
+      "--ignore-certificate-errors",
     ],
   };
   if (PROXY_SERVER) {
@@ -119,6 +120,7 @@ async function main() {
     timezoneId: "America/Los_Angeles",
     geolocation: { latitude: 34.0522, longitude: -118.2437 }, // Los Angeles
     permissions: ["geolocation"],
+    ignoreHTTPSErrors: true,
     colorScheme: "light",
     extraHTTPHeaders: {
       "Accept-Language": "en-US,en;q=0.9",
@@ -318,10 +320,13 @@ async function main() {
     await page.screenshot({ path: resolve(PROJECT_ROOT, "screenshots/stealth_final.png"), fullPage: true });
     console.log("\nFinal URL:", page.url());
     
-    if (page.url().includes("myaccount") || page.url().includes("ManageAccount")) {
+    const finalPath = new URL(page.url()).pathname;
+    if (finalPath.includes("myaccount") || finalPath.includes("ManageAccount")) {
       console.log("\n=== REGISTRATION SUCCESSFUL! ===");
       console.log(`Email: ${config.username}@gmail.com`);
       console.log(`Password: ${config.password}`);
+    } else {
+      console.log("\nRegistration did not complete. Current page:", finalPath);
     }
 
   } catch (error) {
