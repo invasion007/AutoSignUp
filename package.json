@@ -5,11 +5,28 @@
   "type": "module",
   "scripts": {
     "signup": "node scripts/google-signup.mjs",
-    "signup:headless": "HEADLESS=true node scripts/google-signup.mjs"
+    "signup:headless": "HEADLESS=true node scripts/google-signup.mjs",
+    "subscribe": "node scripts/chatgpt-plus-subscribe.mjs",
+    "subscribe:cdp": "CDP=true node scripts/chatgpt-plus-subscribe.mjs",
+    "subscribe:card": "PAYMENT=card node scripts/chatgpt-plus-subscribe.mjs",
+    "subscribe:card:cdp": "CDP=true PAYMENT=card node scripts/chatgpt-plus-subscribe.mjs",
+    "subscribe:headless": "HEADLESS=true node scripts/chatgpt-plus-subscribe.mjs",
+    "subscribe:auto": "AUTO_SUBMIT=true node scripts/chatgpt-plus-subscribe.mjs",
+    "find-proxy": "node scripts/find-residential-proxy.mjs",
+    "find-proxy:all": "node scripts/find-residential-proxy.mjs --all"
   },
   "dependencies": {
-    "playwright": "^1.52.0"
+    "playwright": "^1.52.0",
+    "playwright-extra": "^4.3.6",
+    "playwright-extra-plugin-stealth": "^0.0.1",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
   },
-  "keywords": ["google", "signup", "automation", "playwright", "accessibility"],
+  "keywords": [
+    "google",
+    "signup",
+    "automation",
+    "playwright",
+    "accessibility"
+  ],
   "license": "MIT"
 }

@@ -8,5 +8,26 @@
   },
   "gender": "Rather not say",
   "username": "your.desired.username",
-  "password": "YourStr0ng!Password#2026"
+  "password": "YourStr0ng!Password#2026",
+
+  "chatgptLogin": {
+    "email": "your-email@gmail.com",
+    "password": "YourChatGPTPassword"
+  },
+
+  "payment": {
+    "email": "your-email@gmail.com",
+    "cardNumber": "4242424242424242",
+    "expiry": "12/28",
+    "cvc": "123",
+    "cardholderName": "YOUR NAME",
+    "country": "United States",
+    "postalCode": "10001",
+    "billingAddress": {
+      "address1": "Broadway",
+      "city": "New York",
+      "region": "New York",
+      "postalCode": "10007"
+    }
+  }
 }

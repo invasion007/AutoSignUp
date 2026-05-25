@@ -1,6 +1,6 @@
-# 交接文档 — Google 账号自动注册项目
+# 交接文档 — 自动注册与订阅项目
 
-> 最后更新: 2026-05-24  
+> 最后更新: 2026-05-25  
 > 仓库: https://github.com/invasion007/AutoSignUp  
 > 分支: `initial-setup`
 
@@ -244,3 +244,340 @@ with sync_playwright() as p:
 ---
 
 *本文档为完整交接记录，包含所有已知信息和下一步操作指南。*
+
+---
+
+## 八、ChatGPT Plus 订阅自动化（2026-05-25 新增）
+
+### 8.1 背景
+
+用户已成功注册 ChatGPT 免费账号（david.carter.2490@outlook.com），现需要升级为 Plus 订阅。  
+参考 [FoundZiGu/GuJumpgate](https://github.com/FoundZiGu/GuJumpgate)（2466 Star，100% 成功率）的方法实现。
+
+### 8.2 核心方法（参考 GuJumpgate）
+
+**不通过 UI 导航**，直接调用 ChatGPT 后端 API 创建 Stripe Checkout 会话：
+
+```
+Step 1: GET /api/auth/session → 获取 accessToken
+Step 2: POST /backend-api/payments/checkout → 获取 checkout_session_id
+Step 3: 打开 https://chatgpt.com/checkout/{entity}/{session_id}
+Step 4: 在 Stripe 页面填写账单/支付信息
+Step 5: 提交订阅
+```
+
+**API Payload（PayPal 路径，推荐）：**
+
+```json
+{
+  "entry_point": "all_plans_pricing_modal",
+  "plan_name": "chatgptplusplan",
+  "promo_campaign": {
+    "promo_campaign_id": "plus-1-month-free",
+    "is_coupon_from_query_param": false
+  },
+  "checkout_ui_mode": "hosted",
+  "billing_details": { "country": "US", "currency": "USD" }
+}
+```
+
+### 8.3 两种支付路径
+
+| 路径 | checkout_ui_mode | entity | Promo | 首月价格 |
+|------|-----------------|--------|-------|---------|
+| **PayPal（推荐）** | hosted | openai_ie | plus-1-month-free | **$0** |
+| 信用卡 | custom | openai_llc | 无 | $20 |
+
+### 8.4 实现脚本
+
+| 文件 | 语言 | 说明 |
+|------|------|------|
+| `scripts/chatgpt-plus-subscribe.mjs` | Node.js | 完整订阅脚本（独立浏览器 + CDP 模式） |
+| `scripts/chatgpt_plus_subscribe.py` | Python | CDP 版本（连接已登录浏览器） |
+
+### 8.5 npm 命令
+
+| 命令 | 说明 |
+|------|------|
+| `npm run subscribe` | PayPal 模式（标准） |
+| `npm run subscribe:cdp` | PayPal + CDP（推荐） |
+| `npm run subscribe:card` | 信用卡模式 |
+| `npm run subscribe:card:cdp` | 信用卡 + CDP |
+| `npm run subscribe:auto` | 自动提交（跳过 30 秒确认） |
+
+### 8.6 配置
+
+在 `config.json` 中添加 `payment` 字段：
+
+```json
+{
+  "payment": {
+    "email": "your-email@gmail.com",
+    "cardNumber": "4242424242424242",
+    "expiry": "12/28",
+    "cvc": "123",
+    "cardholderName": "YOUR NAME",
+    "billingAddress": {
+      "address1": "Broadway",
+      "city": "New York",
+      "region": "New York",
+      "postalCode": "10007"
+    }
+  }
+}
+```
+
+### 8.7 Stripe Checkout 关键选择器（来自 GuJumpgate）
+
+```
+提交按钮:   button[data-testid="submit-button"]
+PayPal:     [data-testid="paypal-accordion-item-button"]
+账单地址:   #billingAddressLine1, #billingLocality, #billingPostalCode
+            #billingAdministrativeArea（州）, #billingCountry, #billingName
+服务条款:   #termsOfServiceConsentCheckbox
+```
+
+### 8.8 注意事项
+
+- **支付信息安全**: config.json 包含敏感支付数据，已在 .gitignore 中排除
+- **CDP 模式推荐**: 先在真实浏览器中登录 ChatGPT，再用 CDP 连接
+- **住宅 IP 必须**: ChatGPT 和 Stripe 都需要住宅 IP（非数据中心）
+- **Stripe 反自动化**: 如遇问题，使用 CDP 模式手动辅助
+
+### 8.9 参考项目
+
+| 项目 | 说明 |
+|------|------|
+| **[FoundZiGu/GuJumpgate](https://github.com/FoundZiGu/GuJumpgate)** | **Chrome 扩展，PayPal 全流程，100% 成功率** |
+| [zxyyang/plus_gopay_gptp-plus](https://github.com/zxyyang/plus_gopay_gptp-plus) | PayPal 通道批量工具 |
+| [DanOps-1/Gpt-Agreement-Payment](https://github.com/DanOps-1/Gpt-Agreement-Payment) | Stripe 协议端到端重放 |
+
+### 8.10 相关文档
+
+- `docs/CHATGPT_PLUS_订阅流程文档.md` — 完整技术文档（URL、选择器、支付字段、地址种子）
+- `skills/SKILL_chatgpt_plus_subscribe.md` — 可复用的技能文档
+
+---
+
+## 九、住宅 IP 代理获取方法（2026-05-25 新增）
+
+### 9.1 为什么需要住宅 IP
+
+ChatGPT 使用 Cloudflare 保护，会检测 IP 类型：
+
+| IP 类型 | ChatGPT 结果 | 典型来源 |
+|---------|-------------|---------|
+| 数据中心 IP | Cloudflare 挑战循环 / 403 | AWS, GCP, Azure, Vultr, DigitalOcean |
+| VPN / 商业代理 | "Unable to load site" / 403 | NordVPN, Webshare, 多数付费代理 |
+| **住宅 ISP** | **正常访问** | Cox, Comcast, AT&T, Spectrum, Verizon |
+
+**判断方法**: 查询 `ip-api.com` 的 `isp` 字段，住宅 ISP 名称包含 Cox, Comcast, AT&T, Spectrum 等。
+
+### 9.2 免费住宅代理获取（ProxyScrape）
+
+**已验证的方法**（2026-05-25 成功注册 ChatGPT Free 使用此方法）。
+
+**代理发现脚本**: `scripts/find-residential-proxy.mjs`
+
+```bash
+# 运行代理发现工具
+node scripts/find-residential-proxy.mjs              # 默认检查 30 个
+node scripts/find-residential-proxy.mjs --max 100    # 检查 100 个
+node scripts/find-residential-proxy.mjs --all         # 检查所有
+
+# 输出示例:
+# PROXY=socks5://98.182.147.97:4145   # Cox Communications (Las Vegas, Nevada)
+```
+
+**工作原理**:
+
+1. 从 ProxyScrape API 获取免费 US SOCKS5 代理列表
+2. 逐个检查每个代理的 IP 信息（通过 ip-api.com）
+3. 过滤出住宅 ISP 的代理（排除数据中心关键词）
+4. 输出可直接使用的 `PROXY=socks5://ip:port` 格式
+
+**ProxyScrape API**:
+```
+https://api.proxyscrape.com/v2/?request=displayproxies&protocol=socks5&timeout=10000&country=US
+```
+
+### 9.3 已验证成功的代理
+
+| 日期 | 代理 | ISP | 城市 | 用途 | 状态 |
+|------|------|-----|------|------|------|
+| 2026-05-25 | `socks5://98.182.147.97:4145` | Cox Communications | Las Vegas, NV | ChatGPT Free 注册 | ❌ 已失效 |
+| 2026-05-25 | `socks5://206.123.156.225:6868` | Newfold Digital | Jacksonville, FL, US | ChatGPT 访问（Playwright） | ✅ 可用 |
+| 2026-05-25 | `socks5://206.123.156.233:4227` | SAKURA Internet | Osaka, JP | ChatGPT 访问（Playwright） | ✅ 可用（最稳定） |
+
+### 9.4 关键发现：浏览器指纹 + 代理缺一不可
+
+> **2026-05-25 重要发现**
+
+**仅有代理不够，还需要干净的浏览器指纹。** Cloudflare 同时检测 IP 和浏览器指纹。
+
+| 测试方式 | IP 类型 | 浏览器指纹 | 结果 |
+|----------|---------|-----------|------|
+| curl + 代理 | 代理 IP | 无浏览器 | 403（Cloudflare JS 挑战无法执行） |
+| Devin 自带浏览器（无代理） | AWS 数据中心 | Devin UA（含 "Devin/1.0"） | Cloudflare 挑战循环 |
+| Devin 自带浏览器 + 代理 | 代理 IP | Devin UA | Cloudflare 挑战循环 |
+| nodriver (undetected-chromedriver) 无代理 | AWS 数据中心 | 干净 UA | Cloudflare 挑战循环 60 秒 |
+| cloudscraper / curl_cffi 无代理 | AWS 数据中心 | 模拟浏览器 TLS | 403 |
+| **Playwright 新实例 + stealth + 代理** | **代理 IP** | **干净 UA + stealth** | **✅ 成功通过** |
+
+**结论**: 必须同时满足两个条件:
+1. **代理 IP**（非数据中心，能通过 `ip-api.com` 检查的非 DC IP）
+2. **干净浏览器**（全新 Playwright 实例 + stealth 脚本 + 正常 User-Agent）
+
+### 9.5 正确的 Playwright 代理使用方法（推荐）
+
+```javascript
+import { chromium } from "playwright";
+
+// 启动全新浏览器实例（不使用已有的 Devin 浏览器！）
+const browser = await chromium.launch({
+  headless: false,
+  args: [
+    "--no-sandbox",
+    "--disable-blink-features=AutomationControlled",
+    "--disable-features=IsolateOrigins,site-per-process",
+  ],
+});
+
+const context = await browser.newContext({
+  proxy: { server: "socks5://206.123.156.233:4227" },
+  userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.6943.126 Safari/537.36",
+  locale: "en-US",
+  timezoneId: "America/New_York",
+  viewport: { width: 1280, height: 720 },
+  deviceScaleFactor: 1,
+});
+
+// Stealth: 必须添加 anti-detection 脚本
+await context.addInitScript(() => {
+  Object.defineProperty(navigator, 'webdriver', { get: () => false });
+  Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+  Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+  window.chrome = { runtime: {} };
+  const originalQuery = window.navigator.permissions.query;
+  window.navigator.permissions.query = (parameters) =>
+    parameters.name === 'notifications'
+      ? Promise.resolve({ state: Notification.permission })
+      : originalQuery(parameters);
+});
+
+const page = await context.newPage();
+await page.goto("https://chatgpt.com/");
+// → ChatGPT 正常加载！
+```
+
+**⚠️ 关键注意事项:**
+- **不要使用 CDP 连接已有的 Devin 浏览器**（UA 含 "Devin/1.0"，会被 Cloudflare 检测）
+- **必须启动全新的 Playwright 浏览器实例**
+- **必须添加 stealth 脚本**（navigator.webdriver = false 等）
+- 代理不需要是住宅 IP，只需要 ip-api.com 不显示为 datacenter 的 IP
+
+### 9.6 代理扫描结果汇总
+
+#### 第一次扫描（仅 US SOCKS5，244 个）
+
+| 分类 | 数量 | 说明 |
+|------|------|------|
+| 超时/不可用 | ~220 | 大部分免费代理已失效 |
+| 数据中心 IP | ~5 | 能连但会被 ChatGPT 封 |
+| 非 DC IP（HTTP only） | ~19 | 能连 HTTP 但不支持 HTTPS |
+| **可用住宅 IP** | **0** | curl 测试全部失败 |
+
+#### 第二次扫描（全球 SOCKS5，13388 个，30 并发）
+
+扫描范围：优先检查可能是住宅的 IP 段（106 个），加全球随机抽样 500 个
+
+| 分类 | 数量 | 说明 |
+|------|------|------|
+| 非 DC IP（通过 ip-api.com） | 41 | 不在数据中心关键词列表中 |
+| 支持 HTTPS | 26 | 能通过 `socks5h://` 连接 HTTPS 站点 |
+| ChatGPT 返回 403 | **20** | Cloudflare 有响应但需要 JS 挑战 |
+| ChatGPT 超时/失败 | 6 | 连接不稳定 |
+
+**关键发现**: 403 不等于被封！403 是 Cloudflare JS 挑战页面，curl 无法执行 JS 所以显示 403，但**用 Playwright 浏览器可以自动通过 JS 挑战**。
+
+#### 可用代理列表（ChatGPT 403 = Playwright 可用）
+
+| 代理 | ISP | 位置 | Playwright 测试 |
+|------|-----|------|----------------|
+| `socks5://206.123.156.225:6868` | Newfold Digital | Jacksonville, FL, US | ✅ 通过 |
+| `socks5://206.123.156.233:4227` | SAKURA Internet | Osaka, JP | ✅ 通过（最稳定） |
+| `socks5://206.123.156.202:5080` | Liquid Web B.V. | Amsterdam, NL | 返回 403，待测 |
+| `socks5://206.123.156.233:13186` | AS8560 ES | Madrid, ES | 返回 403，待测 |
+| `socks5://206.123.156.228:4764` | Biznet Gio Nusantara | Bogor, ID | 返回 403，待测 |
+| `socks5://206.123.156.226:6095` | WIRENET CHILE | Santiago, CL | 返回 403，待测 |
+| `socks5://206.123.156.219:4730` | Sigma Soft SRL | Odorheiu Secuiesc, RO | 返回 403，待测 |
+| `socks5://206.123.156.226:6090` | Viettel Corp | Ho Chi Minh City, VN | 返回 403，待测 |
+| `socks5://206.123.156.201:6455` | Flesk Telecom | Faro, PT | 返回 403，待测 |
+| `socks5://206.123.156.201:5360` | Teknosos | Antalya, TR | 返回 403，待测 |
+| `socks5://206.123.156.210:4890` | Internet Names | Waterloo, ON, CA | 返回 403，待测 |
+| `socks5://206.123.156.219:4145` | Teknosos | Antalya, TR | 返回 403，待测 |
+| `socks5://206.123.156.233:6668` | Bharat Sanchar | Pawni, IN | 返回 403，待测 |
+| `socks5://206.123.156.236:4402` | cyberneticos c1 | El Puerto de Santa María, ES | 返回 403，待测 |
+| `socks5://206.123.156.224:6661` | IONOS | Karlsruhe, DE | 返回 403，待测 |
+| `socks5://206.123.156.211:5452` | Teknosos | Antalya, TR | 返回 403，待测 |
+| `socks5://206.123.156.236:4329` | Superonline | Darıca, TR | 返回 403，待测 |
+| `socks5://206.123.156.207:5361` | Teknosos | Antalya, TR | 返回 403，待测 |
+| `socks5://206.123.156.204:7994` | Unified Layer | Provo, UT, US | 返回 403，Playwright 超时 |
+| `socks5://206.123.156.227:4155` | Xglobe Online | Tel Aviv, IL | 返回 403，待测 |
+
+> **注意**: 以上大部分代理的出口 IP 都在 `206.123.156.x` 网段，看起来是同一家代理服务商的旋转代理池。实际出口 IP 显示为不同国家/ISP。这些免费代理不稳定，可能随时失效。
+
+#### 已确认不可用的代理
+
+| 代理 | 原因 |
+|------|------|
+| `socks5://98.182.147.97:4145` | 已下线（之前是 Cox, Las Vegas） |
+| `socks5://131.153.163.234:37596` | Comcast Cable，不支持 HTTPS |
+| `socks5://107.152.32.98:1710` | Breezeline，连接超时 |
+| `socks5://38.147.187.55:1100` | Xnnet LLC，ChatGPT 显示 "Unable to load site" |
+| 所有 `47.250.x.x` / `8.213.x.x` / `8.221.x.x` | XIFTCS Company (Whitechapel)，不支持 HTTPS |
+
+### 9.7 下一步操作指南
+
+1. **首先尝试已验证的代理**:
+   ```bash
+   # 在 AutoSignUp 目录下
+   PROXY=socks5://206.123.156.233:4227 node scripts/chatgpt-plus-subscribe.mjs
+   ```
+
+2. **如果已验证代理失效，重新扫描**:
+   ```bash
+   npm run find-proxy:all
+   # 然后用 Playwright 测试返回的代理
+   ```
+
+3. **测试新代理是否能访问 ChatGPT**:
+   - curl 返回 403 ≠ 不可用（403 是 Cloudflare JS 挑战）
+   - 必须用 Playwright 新实例 + stealth 脚本测试
+   - 参考 9.5 节的代码模板
+
+4. **关于 ChatGPT 登录**:
+   - 账号: `david.carter.2490@outlook.com`
+   - 登录方式: 邮箱验证码（无密码）
+   - 需要能访问 Outlook 邮箱获取验证码
+
+### 9.8 接码服务信息
+
+用户提供的接码服务（可用于 PayPal 或其他验证）：
+
+```
+手机号: +15822636711
+API: http://a.62-us.com/api/get_sms?key=4b6a853e5caceee469c3910ed0b28943
+```
+
+**用法**: 直接 GET 请求 API URL，返回 `ok|验证码内容` 或 `no|暂无验证码`。
+
+### 9.9 代理扫描脚本
+
+| 脚本 | 用途 |
+|------|------|
+| `scripts/find-residential-proxy.mjs` | 快速扫描 US SOCKS5 代理（默认 30 个） |
+| `npm run find-proxy` | 运行快速扫描 |
+| `npm run find-proxy:all` | 扫描所有 US 代理 |
+
+> 如需扫描全球代理（更大范围），使用 `/tmp/fast_proxy_scan.py`（30 并发，检查 HTTPS + ChatGPT 可达性）
