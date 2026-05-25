@@ -221,17 +221,85 @@ PROXY=http://127.0.0.1:18080 node auto_register_stealth.mjs
 
 ---
 
+## 最新测试结果 (2026-05-25)
+
+### 测试 1: 改进版脚本 + Cox 住宅IP + 移动模式
+
+| 配置 | 值 |
+|------|-----|
+| 脚本 | `scripts/google-register-with-proxy.mjs` (新增) |
+| 代理 | `socks5://98.182.147.97:4145` (Cox, Las Vegas) |
+| 模式 | Pixel 7 移动设备模拟 |
+| 结果 | **步骤1-4成功，步骤5到达 `devicephoneverification`** |
+
+**分析**: Cox IP 98.182.147.97 已被 Google 标记（多次注册使用），触发 `devicephoneverification`（设备需发送SMS）而非普通 `phoneverification`（接收SMS）。
+
+### 测试 2: Stealth 指纹模式 + Cox 住宅IP
+
+| 配置 | 值 |
+|------|-----|
+| 脚本 | `auto_register_stealth.mjs` |
+| 代理 | `socks5://98.182.147.97:4145` (Cox, Las Vegas) |
+| 模式 | Pixel 7 + stealth 指纹伪装 |
+| 结果 | **"Sorry, we could not create your Google Account" 错误** |
+
+**分析**: Google 的反自动化检测更强，stealth 模式可能触发了额外的风控规则。
+
+### 关键发现: `devicephoneverification` vs `phoneverification`
+
+| 验证类型 | URL 特征 | 含义 | 能否用虚拟号码 |
+|----------|---------|------|--------------|
+| 普通SMS | `/phoneverification` (无 device 前缀) | Google **发送** SMS 给你 | ✅ 可以 |
+| 设备SMS | `/devicephoneverification` | 你的设备**发送** SMS 给 Google | ❌ 不可以 |
+| QR 码 | `/mophoneverification` | 需要物理手机扫码 | ❌ 不可以 |
+
+**结论**: 只有普通 `phoneverification` 才能用虚拟号码完成。需要一个**未被 Google 标记**的新鲜住宅 IP 才能获得此验证类型。
+
+---
+
+## 新增脚本 (2026-05-25)
+
+| 文件 | 用途 |
+|------|------|
+| `scripts/google-register-with-proxy.mjs` | 自动发现住宅代理 + 移动模式注册 (推荐) |
+| `scripts/find-residential-proxy.mjs` | 独立的住宅代理发现工具 |
+
+### 使用新脚本
+
+```bash
+# 自动发现住宅IP并注册
+node scripts/google-register-with-proxy.mjs
+
+# 指定代理
+PROXY=socks5://ip:port node scripts/google-register-with-proxy.mjs
+
+# 无头模式
+HEADLESS=true PROXY=socks5://ip:port node scripts/google-register-with-proxy.mjs
+
+# 单独查找住宅代理
+node scripts/find-residential-proxy.mjs
+node scripts/find-residential-proxy.mjs --max 50
+```
+
+---
+
 ## 后续工作方向
 
-### 短期
-1. **Google 注册**: 用住宅IP + 移动模式测试，看能否拿到 SMS 验证而非 QR 码
-2. **自动化验证码**: 集成 Outlook Graph API 自动读取 ChatGPT 验证码邮件
-3. **代理池**: 自动从 ProxyScrape 获取并筛选住宅IP，维护可用代理池
+### 短期 (优先)
+1. **获取新鲜住宅IP**: 当前 Cox IP 已被标记，需要从 ProxyScrape 找到新的未被标记的住宅代理
+2. **Google 注册**: 用新 IP + 移动模式测试，目标是获得 `phoneverification` (而非 `devicephoneverification`)
+3. **代理池自动刷新**: `find-residential-proxy.mjs` 已实现，需定期运行更新可用列表
+
+### 中期
+1. **自动化验证码**: 集成 Outlook Graph API 自动读取 ChatGPT 验证码邮件
+2. **稳定代理**: 评估付费住宅代理:
+   - IPRoyal $1.75/GB (rotating residential)
+   - Webshare Static Residential (10 free IPs trial)
+   - Bright Data (最大但最贵)
 
 ### 长期
 1. **批量注册**: 结合多个 Outlook 邮箱实现批量 ChatGPT 注册
-2. **稳定代理**: 评估付费住宅代理 (IPRoyal $1.75/GB, Webshare Static Residential)
-3. **完全自动化**: 去掉验证码手动输入步骤
+2. **完全自动化**: 去掉验证码手动输入步骤
 
 ---
 

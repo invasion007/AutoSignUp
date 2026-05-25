@@ -6,6 +6,9 @@
   "scripts": {
     "signup": "node scripts/google-signup.mjs",
     "signup:headless": "HEADLESS=true node scripts/google-signup.mjs",
+    "signup:proxy": "node scripts/google-register-with-proxy.mjs",
+    "signup:proxy:headless": "HEADLESS=true node scripts/google-register-with-proxy.mjs",
+    "find-proxy": "node scripts/find-residential-proxy.mjs",
     "chatgpt-signup": "node scripts/chatgpt-signup.mjs",
     "chatgpt-signup:headless": "HEADLESS=true node scripts/chatgpt-signup.mjs"
   },

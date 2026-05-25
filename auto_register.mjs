@@ -291,7 +291,11 @@ async function main() {
     }
 
     await page.screenshot({ path: resolve(PROJECT_ROOT, "screenshots/final.png"), fullPage: true });
+    const finalPath2 = new URL(page.url()).pathname;
     console.log("\nFinal URL:", page.url());
+    if (finalPath2.includes("myaccount") || finalPath2.includes("ManageAccount")) {
+      console.log("\n=== REGISTRATION SUCCESSFUL! ===");
+    }
 
   } catch (error) {
     console.error("\nError during registration:", error.message);
