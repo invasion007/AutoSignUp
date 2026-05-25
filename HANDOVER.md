@@ -328,19 +328,62 @@ sms://96831?body=Send this message without editing. (UNIQUE_CODE)
 - 消息内容: 包含唯一验证码
 - **只有真实运营商号码可以发送到短代码** (VoIP/虚拟号码无法发送)
 
-## 后续工作方向
+## 后续工作方向 (2026-05-25 更新)
 
-### 最可行方案: 用户发送一条SMS
-1. 脚本自动完成步骤1-5 (约60秒)
-2. 脚本捕获需要发送的SMS内容
-3. 用户用语音助手发送: "Hey Siri/Google, send a text to 96831 saying [message]"
-4. 注册自动完成
+### ⚠️ 核心发现 (最新)
 
-### 备选方案
-1. **付费短信发送服务**: Twilio/Vonage 可能可以发送到短代码 (需预先注册和审批)
-2. **付费住宅代理 (IPRoyal/BrightData)**: 高质量未标记IP可能触发 `phoneverification`
-3. **非美国IP**: 其他国家可能有不同验证流程 (需要可用的国际代理)
-4. **TextNow/Google Voice**: 免费美国号码可发短信 (需先注册这些服务)
+经过 20+ 种 IP/UA/模式组合测试，确认：
+- **Google 验证类型完全由 IP 信任分数决定**（不是浏览器指纹）
+- **所有 ProxyScrape 免费代理都被标记**为低信任，始终触发 `devicephoneverification`
+- **sms-activate.org 已关闭**（2025年12月停止运营）
+- **TextNow 网页注册已关闭**（只能通过APP注册）
+- **AdsPower/Multilogin 2026文档确认**: 只有私有/干净住宅IP才能获得 `phoneverification` 或跳过手机验证
+
+### 最终方案: Android 模拟器 + TextNow APP
+
+**详细技术方案见**: `docs/GOOGLE_REGISTRATION_PLAN.md`
+
+```
+方案架构:
+Playwright (Steps 1-5) ──→ Android Emulator (TextNow) ──→ 发SMS到96831
+                                                                  ↓
+                         Google注册完成 ◀────────── 验证通过 ◀────┘
+```
+
+**三层保险:**
+1. 免费: Android模拟器 + TextNow/Talkatone/FreeTone
+2. 低成本 (~$2): IPRoyal住宅代理 + hero-sms接收验证码
+3. 最可靠: 5sim.net 购买发送SMS号码
+
+**服务器环境已确认**: KVM可用、96GB磁盘、8GB内存 — 可运行Android模拟器
+
+### 实施清单
+
+- [ ] 安装 Android SDK + 模拟器 (15分钟)
+- [ ] 下载 TextNow APK 并安装到模拟器
+- [ ] 注册 TextNow 获取免费美国号码
+- [ ] 测试: TextNow 能否发送SMS到短代码96831
+- [ ] 如能发送 → 运行完整注册脚本
+- [ ] 如不能 → 切换备选方案
+
+---
+
+## 验证类型全面测试记录 (2026-05-25)
+
+| # | IP/ISP | 模式 | UA | 指纹 | 结果 |
+|---|--------|------|-----|------|------|
+| 1 | Cox Pensacola (184.181.217.210) | 桌面 | Chrome 131 | WebRTC禁用+全指纹 | mophoneverification (QR) |
+| 2 | Cox Pensacola (184.181.217.201) | 桌面 | Chrome 131 | 最小化 | mophoneverification (QR) |
+| 3 | Cox Pensacola (174.75.211.193) | 桌面 | Chrome 131 | Puppeteer Stealth | BLOCKED |
+| 4 | Cox (98.188.47.132) | 桌面 | Chrome 131 | 基本 | mophoneverification (QR) |
+| 5 | Cox (98.188.47.132) | 移动 | Pixel 7 | 基本 | devicephoneverification |
+| 6 | Cox (70.166.167.55) | 移动/WebView | Pixel 8 Pro | Android模拟 | devicephoneverification |
+| 7 | Performive Beverly Hills | 桌面 | Chrome 131 | 全指纹 | BLOCKED |
+| 8 | AWS直连 (54.69.238.189) | 系统Chrome | 真实Chrome | 无自动化 | mophoneverification (QR) |
+| 9 | 多IP | 移动 | Chrome 100 | 全指纹 | crossflow → BLOCKED |
+| 10 | 多IP | 移动 | Firefox/iPad | 全指纹 | mophoneverification (QR) |
+
+**结论**: 桌面模式→QR码，移动模式→deviceSMS，两者都不是我们需要的 `phoneverification`
 
 ---
 
@@ -351,3 +394,6 @@ sms://96831?body=Send this message without editing. (UNIQUE_CODE)
 - ip-api.com IP查询: http://ip-api.com/json
 - Playwright 文档: https://playwright.dev/docs/api/class-browsertype#browser-type-launch
 - Hero-SMS API: https://hero-sms.com
+- AdsPower 2026无手机注册: https://www.adspower.com/blog/register-gmail-account-without-phone-number
+- Multilogin QR绕过: https://multilogin.com/blog/verify-some-info-before-creating-an-account/
+- YingTu 2026注册指南: https://yingtu.ai/en/blog/us-google-account-registration-guide
