@@ -8,5 +8,6 @@ build/
 .idea/
 node_modules/
 config.json
+config.chatgpt.json
 *.log
 screenshots/

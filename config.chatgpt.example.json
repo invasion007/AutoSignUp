@@ -1,0 +1,16 @@
+{
+  "email": "your-email@outlook.com",
+  "password": "YourStr0ng!Password#2026",
+  "firstName": "David",
+  "lastName": "Carter",
+  "birthday": {
+    "year": "1990",
+    "month": "2",
+    "day": "15"
+  },
+  "proxy": {
+    "server": "",
+    "username": "",
+    "password": ""
+  }
+}
