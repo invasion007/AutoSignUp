@@ -80,9 +80,10 @@ AutoSignUp/
 │   ├── FINDINGS.md                   # 探索发现和结论
 │   └── registration-flow.md          # 详细流程文档（含选择器和URL信息）
 ├── scripts/
-│   ├── google_register.py            # Python 注册自动化脚本 (CDP)
-│   ├── outlook_register.py           # Outlook 注册自动化脚本 (辅助)
-│   └── google-signup.mjs             # Node.js Playwright 注册脚本
+│   ├── google-signup.mjs             # Node.js Playwright 注册脚本（主脚本）
+│   ├── cdp_mobile_register.py        # Python CDP 移动模式注册脚本（已验证可获得SMS验证）
+│   ├── google_register.py            # Python CDP 桌面模式注册脚本
+│   └── outlook_register.py           # Outlook 注册自动化脚本 (辅助)
 ├── skills/
 │   └── SKILL_google_register.md      # 技能文档供复用
 └── accounts/
@@ -114,7 +115,17 @@ MOBILE=false npm run signup
 npm run signup:headless
 ```
 
-### 方式二: Python 脚本 (通过 CDP 连接已打开的 Chrome)
+### 方式二: Python CDP 移动模式（推荐 — 已验证可获得 SMS 验证）
+
+```bash
+pip install playwright
+# 确保 Chrome 已启动并开启 CDP (端口 29229)
+python scripts/cdp_mobile_register.py
+```
+
+此脚本连接到已运行的 Chrome 浏览器，创建 Pixel 7 移动模拟上下文，自动完成步骤 1-4 后到达 SMS 验证页面。
+
+### 方式三: Python CDP 桌面模式
 
 ```bash
 pip install playwright

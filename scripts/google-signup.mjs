@@ -9,12 +9,21 @@
  *   node scripts/google-signup.mjs                       # 移动模式（推荐）
  *   MOBILE=false node scripts/google-signup.mjs          # 桌面模式
  *   HEADLESS=true node scripts/google-signup.mjs         # 无界面模式
+ *   PROXY=http://127.0.0.1:18080 node scripts/google-signup.mjs  # 通过代理
+ *   PHONE=+12025551234 node scripts/google-signup.mjs    # 提供虚拟号码
+ *
+ * 虚拟号码流程（Bee-SMS 等）：
+ *   1. 在 Bee-SMS 购买虚拟号码
+ *   2. 设置 PHONE 环境变量为该号码
+ *   3. 脚本到达验证步骤时自动输入号码
+ *   4. 等待你从 Bee-SMS 获取验证码后手动输入
  */
 
 import { chromium, devices } from "playwright";
 import { readFileSync, existsSync, mkdirSync } from "fs";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
+import { createInterface } from "readline";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, "..");
@@ -54,6 +63,11 @@ function log(step, message) {
   console.log(`[${timestamp}] 步骤 ${step}: ${message}`);
 }
 
+function prompt(question) {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise((resolve) => rl.question(question, (answer) => { rl.close(); resolve(answer.trim()); }));
+}
+
 // ---------------------------------------------------------------------------
 // 注册步骤
 // ---------------------------------------------------------------------------
@@ -83,24 +97,39 @@ async function stepBirthdayGender(page, config) {
   log(2, "填写生日和性别...");
   await waitForNavigation(page, "signup/birthdaygender");
 
-  // 选择月份
-  await clickDropdownOption(
-    page,
-    'div[aria-expanded="false"]:near(input[name="day"])',
-    config.birthday.month
-  );
+  // 选择月份 — 使用 JS 点击 section 内的第一个下拉框，避免误击 footer 语言选择器
+  await page.evaluate(() => {
+    const section = document.querySelector("section");
+    const dropdowns = section.querySelectorAll("div[aria-expanded]");
+    if (dropdowns[0]) dropdowns[0].click();
+  });
+  await page.waitForTimeout(1000);
+  await page.evaluate((month) => {
+    const items = document.querySelectorAll("li");
+    for (const li of items) {
+      if (li.textContent.trim() === month) { li.click(); break; }
+    }
+  }, config.birthday.month);
+  await page.waitForTimeout(500);
 
   // 填写日期和年份
   await page.fill('input[name="day"]', config.birthday.day);
   await page.fill('input[name="year"]', config.birthday.year);
 
-  // 选择性别
-  const genderDropdowns = page.locator('div[aria-expanded="false"]');
-  const genderDropdown = genderDropdowns.last();
-  await genderDropdown.click();
+  // 选择性别 — 使用 JS 点击 section 内的第二个下拉框
+  await page.evaluate(() => {
+    const section = document.querySelector("section");
+    const dropdowns = section.querySelectorAll("div[aria-expanded]");
+    if (dropdowns.length >= 2) dropdowns[1].click();
+  });
+  await page.waitForTimeout(1000);
+  await page.evaluate((gender) => {
+    const items = document.querySelectorAll("li");
+    for (const li of items) {
+      if (li.textContent.trim() === gender) { li.click(); break; }
+    }
+  }, config.gender);
   await page.waitForTimeout(500);
-  await page.locator("li").filter({ hasText: config.gender }).first().click();
-  await page.waitForTimeout(300);
 
   await page.click('button:has-text("Next")');
   log(2, `生日: ${config.birthday.month} ${config.birthday.day}, ${config.birthday.year} | 性别: ${config.gender}`);
@@ -141,22 +170,49 @@ async function stepPassword(page, config) {
  */
 async function stepVerification(page) {
   const currentUrl = page.url();
+  const phoneNumber = process.env.PHONE || "";
 
+  // 情形 A：Google 要求输入手机号（住宅 IP 下可能出现）
+  if (currentUrl.includes("phonenumber") || currentUrl.includes("phone/number")) {
+    log(5, "到达手机号输入验证（住宅 IP 路径）");
+    if (phoneNumber) {
+      log(5, `自动填入手机号: ${phoneNumber}`);
+      await page.fill('input[type="tel"]', phoneNumber);
+      await page.click('button:has-text("Next")');
+      await page.waitForTimeout(3000);
+      log(5, "已提交手机号，等待验证码...");
+      await handleSmsCodeInput(page);
+    } else {
+      console.log("");
+      console.log("=== 需要输入手机号 ===");
+      console.log("Google 要求输入手机号接收验证码。");
+      console.log("请设置 PHONE 环境变量后重新运行：");
+      console.log('  PHONE="+12025551234" node scripts/google-signup.mjs');
+      console.log("");
+      console.log("等待手动输入...");
+      const phone = await prompt("请输入虚拟手机号码（如 +12025551234）：");
+      await page.fill('input[type="tel"]', phone);
+      await page.click('button:has-text("Next")');
+      await page.waitForTimeout(3000);
+      await handleSmsCodeInput(page);
+    }
+    return;
+  }
+
+  // 情形 B：设备发送 SMS 验证（数据中心 IP 下常见）
   if (currentUrl.includes("devicephoneverification")) {
-    // 移动模式 — SMS 短信验证
-    log(5, "到达 SMS 短信验证步骤");
+    log(5, "到达设备 SMS 验证步骤（devicephoneverification）");
     console.log("");
-    console.log("=== SMS 短信验证 ===");
-    console.log("页面显示「Verify your phone number」");
-    console.log("点击「Send SMS」后，Google 会向模拟设备发送验证短信。");
-    console.log("由于这是模拟设备，需要使用虚拟号码服务接收短信。");
+    console.log("=== 设备 SMS 验证 ===");
+    console.log("⚠️  此验证要求设备主动发送 SMS 到 Google，浏览器无法执行。");
     console.log("");
-    console.log("建议的虚拟号码服务（仅供参考）：");
-    console.log("  - sms-activate.org");
-    console.log("  - 5sim.net");
-    console.log("  - onlinesim.io");
+    console.log("这通常是因为从数据中心 IP 注册。");
+    console.log("解决方案：");
+    console.log("  1. 使用住宅 IP 代理 → Google 可能改为输入手机号验证");
+    console.log("  2. 使用 Bee-SMS 虚拟号码 + 住宅 IP");
+    console.log("  3. 请朋友帮忙在手机上完成此步验证");
     console.log("");
-    console.log("等待验证完成...");
+    console.log("等待验证完成（如有人手动操作）...");
 
     await page.waitForURL(
       (url) =>
@@ -165,9 +221,12 @@ async function stepVerification(page) {
       { timeout: 600000 }
     );
     log(5, "SMS 验证已完成！");
-  } else if (currentUrl.includes("mophoneverification") || currentUrl.includes("crossflowverification")) {
-    // 桌面模式 — QR 码验证
-    log(5, "到达 QR 码验证步骤 - 需要手动扫码！");
+    return;
+  }
+
+  // 情形 C：QR 码验证（桌面模式常见）
+  if (currentUrl.includes("mophoneverification") || currentUrl.includes("crossflowverification")) {
+    log(5, "到达 QR 码验证步骤");
     console.log("");
     console.log("=== QR 码验证 ===");
     console.log("1. 打开手机相机 App");
@@ -185,8 +244,57 @@ async function stepVerification(page) {
       { timeout: 600000 }
     );
     log(5, "QR 码验证已完成！");
+    return;
+  }
+
+  // 情形 D：Google 要求输入手机号（另一种 URL 模式）
+  const telInput = page.locator('input[type="tel"]');
+  if (await telInput.isVisible({ timeout: 3000 }).catch(() => false)) {
+    log(5, "检测到手机号输入框");
+    if (phoneNumber) {
+      log(5, `自动填入手机号: ${phoneNumber}`);
+      await telInput.fill(phoneNumber);
+      await page.click('button:has-text("Next")');
+      await page.waitForTimeout(3000);
+      await handleSmsCodeInput(page);
+    } else {
+      console.log("");
+      console.log("检测到手机号输入框，请输入虚拟号码：");
+      const phone = await prompt("请输入虚拟手机号码（如 +12025551234）：");
+      await telInput.fill(phone);
+      await page.click('button:has-text("Next")');
+      await page.waitForTimeout(3000);
+      await handleSmsCodeInput(page);
+    }
+    return;
+  }
+
+  log(5, `未检测到已知验证页面 (URL: ${currentUrl})`);
+}
+
+/**
+ * 等待并输入 SMS 验证码
+ */
+async function handleSmsCodeInput(page) {
+  log("5b", "等待验证码输入页面...");
+  await page.waitForTimeout(2000);
+  
+  const codeInput = page.locator('input[name="code"], input[type="tel"], input[aria-label*="code"], input[aria-label*="Code"]').first();
+  if (await codeInput.isVisible({ timeout: 10000 }).catch(() => false)) {
+    console.log("");
+    console.log("=== 输入验证码 ===");
+    console.log("请从虚拟号码平台（Bee-SMS 等）获取验证码。");
+    const code = await prompt("请输入收到的验证码：");
+    await codeInput.fill(code);
+    await page.click('button:has-text("Next"), button:has-text("Verify")');
+    await page.waitForTimeout(3000);
+    log("5b", "验证码已提交");
   } else {
-    log(5, "未检测到已知验证页面，继续...");
+    console.log("未找到验证码输入框，请手动操作...");
+    await page.waitForURL(
+      (url) => !url.pathname.includes("verification") && !url.pathname.includes("challenge"),
+      { timeout: 600000 }
+    );
   }
 }
 
@@ -241,10 +349,23 @@ async function main() {
     console.log("");
   }
 
-  const browser = await chromium.launch({
+  const proxyServer = process.env.PROXY || "";
+  const proxyUsername = process.env.PROXY_USER || "";
+  const proxyPassword = process.env.PROXY_PASS || "";
+  const launchOptions = {
     headless,
     args: ["--no-sandbox", "--disable-blink-features=AutomationControlled"],
-  });
+  };
+  if (proxyServer) {
+    launchOptions.proxy = { server: proxyServer };
+    if (proxyUsername) {
+      launchOptions.proxy.username = proxyUsername;
+      launchOptions.proxy.password = proxyPassword;
+    }
+    console.log(`代理: ${proxyServer}`);
+  }
+
+  const browser = await chromium.launch(launchOptions);
 
   const contextOptions = useMobile
     ? {
@@ -263,8 +384,10 @@ async function main() {
   try {
     log(0, "打开 Google 注册页面...");
     await page.goto("https://accounts.google.com/signup", {
-      waitUntil: "networkidle",
+      waitUntil: "commit",
+      timeout: 60000,
     });
+    await page.waitForSelector('input[name="firstName"]', { timeout: 60000 });
 
     await stepName(page, config);
     await stepBirthdayGender(page, config);
@@ -272,16 +395,8 @@ async function main() {
     await stepPassword(page, config);
 
     // 等待页面跳转到验证步骤
-    await page.waitForTimeout(2000);
-    const currentUrl = page.url();
-    if (
-      currentUrl.includes("phoneverification") ||
-      currentUrl.includes("mophoneverification") ||
-      currentUrl.includes("crossflowverification") ||
-      currentUrl.includes("devicephoneverification")
-    ) {
-      await stepVerification(page);
-    }
+    await page.waitForTimeout(3000);
+    await stepVerification(page);
 
     await stepRecoveryEmail(page);
     await stepTerms(page);

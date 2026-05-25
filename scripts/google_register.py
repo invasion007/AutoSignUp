@@ -99,22 +99,40 @@ async def register_google_account(
         # ===== Step 2: 填写生日和性别 =====
         print(f"[Step 2/5] 填写生日: {birth_month} {birth_day}, {birth_year}")
         
-        # 选择月份 (点击下拉框)
-        month_dropdown = page.locator('div[aria-expanded="false"]').first
-        await month_dropdown.click()
-        await page.wait_for_selector(f'li:has-text("{birth_month}")')
-        await page.click(f'li:has-text("{birth_month}")')
+        # 选择月份 — 使用 JS 点击 section 内的下拉框，避免误击 footer 语言选择器
+        await page.evaluate("""() => {
+            const section = document.querySelector('section');
+            const dropdowns = section.querySelectorAll('div[aria-expanded]');
+            if (dropdowns[0]) dropdowns[0].click();
+        }""")
+        await asyncio.sleep(1)
+        await page.evaluate(f"""(month) => {{
+            const items = document.querySelectorAll('li');
+            for (const li of items) {{
+                if (li.textContent.trim() === month) {{ li.click(); break; }}
+            }}
+        }}""", birth_month)
+        await asyncio.sleep(0.5)
         
         # 填写日期和年份
         await page.fill('input[name="day"]', birth_day)
         await page.fill('input[name="year"]', birth_year)
         
-        # 选择性别
+        # 选择性别 — 使用 JS 点击 section 内的第二个下拉框
         print(f"[Step 2/5] 选择性别: {gender}")
-        gender_dropdown = page.locator('div:has-text("Gender")[aria-expanded="false"]')
-        await gender_dropdown.click()
-        await page.wait_for_selector(f'li:has-text("{gender}")')
-        await page.click(f'li:has-text("{gender}")')
+        await page.evaluate("""() => {
+            const section = document.querySelector('section');
+            const dropdowns = section.querySelectorAll('div[aria-expanded]');
+            if (dropdowns.length >= 2) dropdowns[1].click();
+        }""")
+        await asyncio.sleep(1)
+        await page.evaluate(f"""(gender) => {{
+            const items = document.querySelectorAll('li');
+            for (const li of items) {{
+                if (li.textContent.trim() === gender) {{ li.click(); break; }}
+            }}
+        }}""", gender)
+        await asyncio.sleep(0.5)
         
         # 点击 Next
         await page.click('button:has-text("Next")')
