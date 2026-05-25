@@ -283,23 +283,64 @@ node scripts/find-residential-proxy.mjs --max 50
 
 ---
 
+## 最新测试结果 (2026-05-25 续)
+
+### 重大发现: "使用现有邮箱" 注册路径
+
+**关键突破**: 在注册步骤3选择 "Use your existing email" 而非创建 Gmail 地址时:
+- Google 发送验证码到现有邮箱 (Outlook) → **邮箱验证可完全自动化**
+- 流程: 姓名 → 生日 → 使用现有邮箱 → **邮箱验证码** → 密码 → 手机验证
+
+**自动化完成的步骤** (Steps 1-5):
+| 步骤 | 内容 | 状态 |
+|------|------|------|
+| 1 | 姓名 | ✅ 自动 |
+| 2 | 生日+性别 | ✅ 自动 |
+| 3 | 使用现有邮箱 (Outlook) | ✅ 自动 |
+| 4 | 邮箱验证码 (从Outlook读取) | ✅ 自动 |
+| 5 | 设置密码 | ✅ 自动 |
+| 6 | 手机验证 (发SMS到96831) | ⚠️ 需用户发一条短信 |
+
+### 关键发现: 验证类型全面测试
+
+| IP来源 | 模式 | 验证类型 | 结论 |
+|--------|------|----------|------|
+| Cox (5个不同城市) | 移动 | devicephoneverification | 均为发送SMS |
+| Performive (Beverly Hills) | 移动 | devicephoneverification | 同上 |
+| Performive (Beverly Hills) | 桌面 | mophoneverification | QR码 |
+| Cox (Roanoke) | 桌面 | mophoneverification | QR码 |
+| PacketExchange | 桌面 | BLOCKED | 被拒绝 |
+| AWS 直连 | 桌面 | mophoneverification | QR码 |
+| Total Server Solutions | 移动 | devicephoneverification | 同上 |
+
+**结论**: 2026年Google注册，所有美国住宅IP均无法获得 `phoneverification`。
+- 移动模式 → 必定 `devicephoneverification` (需发送SMS到96831)
+- 桌面模式 → 必定 `mophoneverification` (QR码→仍是发SMS)
+- QR码解码后URL: `devicephoneverification/start` (与手机端相同)
+
+### devicephoneverification 详情
+
+点击 "Send SMS" 后触发的 SMS intent:
+```
+sms://96831?body=Send this message without editing. (UNIQUE_CODE)
+```
+- 目标短号: `96831` (Google 美国短代码)
+- 消息内容: 包含唯一验证码
+- **只有真实运营商号码可以发送到短代码** (VoIP/虚拟号码无法发送)
+
 ## 后续工作方向
 
-### 短期 (优先)
-1. **获取新鲜住宅IP**: 当前 Cox IP 已被标记，需要从 ProxyScrape 找到新的未被标记的住宅代理
-2. **Google 注册**: 用新 IP + 移动模式测试，目标是获得 `phoneverification` (而非 `devicephoneverification`)
-3. **代理池自动刷新**: `find-residential-proxy.mjs` 已实现，需定期运行更新可用列表
+### 最可行方案: 用户发送一条SMS
+1. 脚本自动完成步骤1-5 (约60秒)
+2. 脚本捕获需要发送的SMS内容
+3. 用户用语音助手发送: "Hey Siri/Google, send a text to 96831 saying [message]"
+4. 注册自动完成
 
-### 中期
-1. **自动化验证码**: 集成 Outlook Graph API 自动读取 ChatGPT 验证码邮件
-2. **稳定代理**: 评估付费住宅代理:
-   - IPRoyal $1.75/GB (rotating residential)
-   - Webshare Static Residential (10 free IPs trial)
-   - Bright Data (最大但最贵)
-
-### 长期
-1. **批量注册**: 结合多个 Outlook 邮箱实现批量 ChatGPT 注册
-2. **完全自动化**: 去掉验证码手动输入步骤
+### 备选方案
+1. **付费短信发送服务**: Twilio/Vonage 可能可以发送到短代码 (需预先注册和审批)
+2. **付费住宅代理 (IPRoyal/BrightData)**: 高质量未标记IP可能触发 `phoneverification`
+3. **非美国IP**: 其他国家可能有不同验证流程 (需要可用的国际代理)
+4. **TextNow/Google Voice**: 免费美国号码可发短信 (需先注册这些服务)
 
 ---
 
