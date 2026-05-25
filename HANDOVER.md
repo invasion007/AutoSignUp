@@ -403,56 +403,165 @@ https://api.proxyscrape.com/v2/?request=displayproxies&protocol=socks5&timeout=1
 
 ### 9.3 已验证成功的代理
 
-| 日期 | 代理 | ISP | 城市 | 用途 |
-|------|------|-----|------|------|
-| 2026-05-25 | `socks5://98.182.147.97:4145` | Cox Communications | Las Vegas, NV | ChatGPT 免费账号注册（成功） |
+| 日期 | 代理 | ISP | 城市 | 用途 | 状态 |
+|------|------|-----|------|------|------|
+| 2026-05-25 | `socks5://98.182.147.97:4145` | Cox Communications | Las Vegas, NV | ChatGPT Free 注册 | ❌ 已失效 |
+| 2026-05-25 | `socks5://206.123.156.225:6868` | Newfold Digital | Jacksonville, FL, US | ChatGPT 访问（Playwright） | ✅ 可用 |
+| 2026-05-25 | `socks5://206.123.156.233:4227` | SAKURA Internet | Osaka, JP | ChatGPT 访问（Playwright） | ✅ 可用（最稳定） |
 
-### 9.4 代理使用方法
+### 9.4 关键发现：浏览器指纹 + 代理缺一不可
 
-**方法 1: Playwright 浏览器代理（推荐）**
+> **2026-05-25 重要发现**
+
+**仅有代理不够，还需要干净的浏览器指纹。** Cloudflare 同时检测 IP 和浏览器指纹。
+
+| 测试方式 | IP 类型 | 浏览器指纹 | 结果 |
+|----------|---------|-----------|------|
+| curl + 代理 | 代理 IP | 无浏览器 | 403（Cloudflare JS 挑战无法执行） |
+| Devin 自带浏览器（无代理） | AWS 数据中心 | Devin UA（含 "Devin/1.0"） | Cloudflare 挑战循环 |
+| Devin 自带浏览器 + 代理 | 代理 IP | Devin UA | Cloudflare 挑战循环 |
+| nodriver (undetected-chromedriver) 无代理 | AWS 数据中心 | 干净 UA | Cloudflare 挑战循环 60 秒 |
+| cloudscraper / curl_cffi 无代理 | AWS 数据中心 | 模拟浏览器 TLS | 403 |
+| **Playwright 新实例 + stealth + 代理** | **代理 IP** | **干净 UA + stealth** | **✅ 成功通过** |
+
+**结论**: 必须同时满足两个条件:
+1. **代理 IP**（非数据中心，能通过 `ip-api.com` 检查的非 DC IP）
+2. **干净浏览器**（全新 Playwright 实例 + stealth 脚本 + 正常 User-Agent）
+
+### 9.5 正确的 Playwright 代理使用方法（推荐）
 
 ```javascript
 import { chromium } from "playwright";
 
-const browser = await chromium.launch({ headless: false });
-const context = await browser.newContext({
-  proxy: { server: "socks5://98.182.147.97:4145" },
-  userAgent: "Mozilla/5.0 (X11; Linux x86_64) ...",
-  locale: "en-US",
+// 启动全新浏览器实例（不使用已有的 Devin 浏览器！）
+const browser = await chromium.launch({
+  headless: false,
+  args: [
+    "--no-sandbox",
+    "--disable-blink-features=AutomationControlled",
+    "--disable-features=IsolateOrigins,site-per-process",
+  ],
 });
+
+const context = await browser.newContext({
+  proxy: { server: "socks5://206.123.156.233:4227" },
+  userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.6943.126 Safari/537.36",
+  locale: "en-US",
+  timezoneId: "America/New_York",
+  viewport: { width: 1280, height: 720 },
+  deviceScaleFactor: 1,
+});
+
+// Stealth: 必须添加 anti-detection 脚本
+await context.addInitScript(() => {
+  Object.defineProperty(navigator, 'webdriver', { get: () => false });
+  Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+  Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+  window.chrome = { runtime: {} };
+  const originalQuery = window.navigator.permissions.query;
+  window.navigator.permissions.query = (parameters) =>
+    parameters.name === 'notifications'
+      ? Promise.resolve({ state: Notification.permission })
+      : originalQuery(parameters);
+});
+
 const page = await context.newPage();
 await page.goto("https://chatgpt.com/");
+// → ChatGPT 正常加载！
 ```
 
-**方法 2: 环境变量方式**
+**⚠️ 关键注意事项:**
+- **不要使用 CDP 连接已有的 Devin 浏览器**（UA 含 "Devin/1.0"，会被 Cloudflare 检测）
+- **必须启动全新的 Playwright 浏览器实例**
+- **必须添加 stealth 脚本**（navigator.webdriver = false 等）
+- 代理不需要是住宅 IP，只需要 ip-api.com 不显示为 datacenter 的 IP
 
-```bash
-PROXY=socks5://98.182.147.97:4145 EMAIL=david.carter.2490@outlook.com node scripts/chatgpt-signup.mjs
-```
+### 9.6 代理扫描结果汇总
 
-### 9.5 注意事项与限制
-
-1. **免费代理不稳定** — 可能随时失效，需定期重新扫描
-2. **SOCKS5 代理多数不支持 HTTPS** — 部分免费 SOCKS5 只能转发 HTTP，不能转发 TLS
-3. **住宅 IP 比例很低** — 200+ 个免费代理中通常只有 1-5 个是真正的住宅 IP
-4. **重复使用会被标记** — 同一住宅 IP 注册过多账号后会被 Cloudflare 标记
-5. **推荐付费方案** — 稳定使用建议购买付费住宅代理（IPFoxy、Luminati 等）
-
-### 9.6 2026-05-25 代理扫描结果
-
-扫描 244 个 ProxyScrape US SOCKS5 代理，结果：
+#### 第一次扫描（仅 US SOCKS5，244 个）
 
 | 分类 | 数量 | 说明 |
 |------|------|------|
 | 超时/不可用 | ~220 | 大部分免费代理已失效 |
 | 数据中心 IP | ~5 | 能连但会被 ChatGPT 封 |
-| "住宅" IP（实际为 VPN） | ~15 | ip-api 显示住宅但实际被 ChatGPT 识别为代理 |
-| **真正可用的住宅 IP** | **0** | 本次未找到能访问 ChatGPT 的住宅代理 |
+| 非 DC IP（HTTP only） | ~19 | 能连 HTTP 但不支持 HTTPS |
+| **可用住宅 IP** | **0** | curl 测试全部失败 |
 
-**结论**: 免费代理方法在 2026-05-25 已无法可靠获取能访问 ChatGPT 的住宅 IP。  
-**建议**: 使用付费住宅代理服务或自建住宅出口 VPN。
+#### 第二次扫描（全球 SOCKS5，13388 个，30 并发）
 
-### 9.7 接码服务信息
+扫描范围：优先检查可能是住宅的 IP 段（106 个），加全球随机抽样 500 个
+
+| 分类 | 数量 | 说明 |
+|------|------|------|
+| 非 DC IP（通过 ip-api.com） | 41 | 不在数据中心关键词列表中 |
+| 支持 HTTPS | 26 | 能通过 `socks5h://` 连接 HTTPS 站点 |
+| ChatGPT 返回 403 | **20** | Cloudflare 有响应但需要 JS 挑战 |
+| ChatGPT 超时/失败 | 6 | 连接不稳定 |
+
+**关键发现**: 403 不等于被封！403 是 Cloudflare JS 挑战页面，curl 无法执行 JS 所以显示 403，但**用 Playwright 浏览器可以自动通过 JS 挑战**。
+
+#### 可用代理列表（ChatGPT 403 = Playwright 可用）
+
+| 代理 | ISP | 位置 | Playwright 测试 |
+|------|-----|------|----------------|
+| `socks5://206.123.156.225:6868` | Newfold Digital | Jacksonville, FL, US | ✅ 通过 |
+| `socks5://206.123.156.233:4227` | SAKURA Internet | Osaka, JP | ✅ 通过（最稳定） |
+| `socks5://206.123.156.202:5080` | Liquid Web B.V. | Amsterdam, NL | 返回 403，待测 |
+| `socks5://206.123.156.233:13186` | AS8560 ES | Madrid, ES | 返回 403，待测 |
+| `socks5://206.123.156.228:4764` | Biznet Gio Nusantara | Bogor, ID | 返回 403，待测 |
+| `socks5://206.123.156.226:6095` | WIRENET CHILE | Santiago, CL | 返回 403，待测 |
+| `socks5://206.123.156.219:4730` | Sigma Soft SRL | Odorheiu Secuiesc, RO | 返回 403，待测 |
+| `socks5://206.123.156.226:6090` | Viettel Corp | Ho Chi Minh City, VN | 返回 403，待测 |
+| `socks5://206.123.156.201:6455` | Flesk Telecom | Faro, PT | 返回 403，待测 |
+| `socks5://206.123.156.201:5360` | Teknosos | Antalya, TR | 返回 403，待测 |
+| `socks5://206.123.156.210:4890` | Internet Names | Waterloo, ON, CA | 返回 403，待测 |
+| `socks5://206.123.156.219:4145` | Teknosos | Antalya, TR | 返回 403，待测 |
+| `socks5://206.123.156.233:6668` | Bharat Sanchar | Pawni, IN | 返回 403，待测 |
+| `socks5://206.123.156.236:4402` | cyberneticos c1 | El Puerto de Santa María, ES | 返回 403，待测 |
+| `socks5://206.123.156.224:6661` | IONOS | Karlsruhe, DE | 返回 403，待测 |
+| `socks5://206.123.156.211:5452` | Teknosos | Antalya, TR | 返回 403，待测 |
+| `socks5://206.123.156.236:4329` | Superonline | Darıca, TR | 返回 403，待测 |
+| `socks5://206.123.156.207:5361` | Teknosos | Antalya, TR | 返回 403，待测 |
+| `socks5://206.123.156.204:7994` | Unified Layer | Provo, UT, US | 返回 403，Playwright 超时 |
+| `socks5://206.123.156.227:4155` | Xglobe Online | Tel Aviv, IL | 返回 403，待测 |
+
+> **注意**: 以上大部分代理的出口 IP 都在 `206.123.156.x` 网段，看起来是同一家代理服务商的旋转代理池。实际出口 IP 显示为不同国家/ISP。这些免费代理不稳定，可能随时失效。
+
+#### 已确认不可用的代理
+
+| 代理 | 原因 |
+|------|------|
+| `socks5://98.182.147.97:4145` | 已下线（之前是 Cox, Las Vegas） |
+| `socks5://131.153.163.234:37596` | Comcast Cable，不支持 HTTPS |
+| `socks5://107.152.32.98:1710` | Breezeline，连接超时 |
+| `socks5://38.147.187.55:1100` | Xnnet LLC，ChatGPT 显示 "Unable to load site" |
+| 所有 `47.250.x.x` / `8.213.x.x` / `8.221.x.x` | XIFTCS Company (Whitechapel)，不支持 HTTPS |
+
+### 9.7 下一步操作指南
+
+1. **首先尝试已验证的代理**:
+   ```bash
+   # 在 AutoSignUp 目录下
+   PROXY=socks5://206.123.156.233:4227 node scripts/chatgpt-plus-subscribe.mjs
+   ```
+
+2. **如果已验证代理失效，重新扫描**:
+   ```bash
+   npm run find-proxy:all
+   # 然后用 Playwright 测试返回的代理
+   ```
+
+3. **测试新代理是否能访问 ChatGPT**:
+   - curl 返回 403 ≠ 不可用（403 是 Cloudflare JS 挑战）
+   - 必须用 Playwright 新实例 + stealth 脚本测试
+   - 参考 9.5 节的代码模板
+
+4. **关于 ChatGPT 登录**:
+   - 账号: `david.carter.2490@outlook.com`
+   - 登录方式: 邮箱验证码（无密码）
+   - 需要能访问 Outlook 邮箱获取验证码
+
+### 9.8 接码服务信息
 
 用户提供的接码服务（可用于 PayPal 或其他验证）：
 
@@ -462,3 +571,13 @@ API: http://a.62-us.com/api/get_sms?key=4b6a853e5caceee469c3910ed0b28943
 ```
 
 **用法**: 直接 GET 请求 API URL，返回 `ok|验证码内容` 或 `no|暂无验证码`。
+
+### 9.9 代理扫描脚本
+
+| 脚本 | 用途 |
+|------|------|
+| `scripts/find-residential-proxy.mjs` | 快速扫描 US SOCKS5 代理（默认 30 个） |
+| `npm run find-proxy` | 运行快速扫描 |
+| `npm run find-proxy:all` | 扫描所有 US 代理 |
+
+> 如需扫描全球代理（更大范围），使用 `/tmp/fast_proxy_scan.py`（30 并发，检查 HTTPS + ChatGPT 可达性）

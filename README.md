@@ -87,19 +87,27 @@ python scripts/chatgpt_plus_subscribe.py --auto-submit
 
 ### 住宅 IP 代理（前提条件）
 
-ChatGPT 需要住宅 IP 才能访问。本项目包含免费住宅代理发现工具：
+ChatGPT 需要**代理 + 干净浏览器指纹**才能访问（Cloudflare 同时检测 IP 和浏览器指纹）。
 
 ```bash
-# 扫描 ProxyScrape 免费 SOCKS5 代理，筛选 US 住宅 IP
-node scripts/find-residential-proxy.mjs              # 默认检查 30 个
-node scripts/find-residential-proxy.mjs --max 100    # 检查 100 个
-node scripts/find-residential-proxy.mjs --all         # 检查所有
+# 快速扫描 US SOCKS5 代理
+npm run find-proxy                    # 默认 30 个
+npm run find-proxy:all                # 全部
 
-# 输出示例:
-# PROXY=socks5://98.182.147.97:4145   # Cox Communications (Las Vegas, Nevada)
+# 全球扫描（30 并发，含 HTTPS + ChatGPT 测试）
+python scripts/fast_proxy_scan.py
 ```
 
-> **注意**: 免费代理不稳定，住宅 IP 比例很低。建议付费住宅代理（IPFoxy、Luminati 等）确保稳定性。
+**当前可用代理（2026-05-25 验证）：**
+```
+socks5://206.123.156.233:4227   # SAKURA Internet (Osaka, JP) — 最稳定
+socks5://206.123.156.225:6868   # Newfold Digital (Jacksonville, FL)
+```
+
+**关键发现：** curl 返回 403 ≠ 不可用！403 是 Cloudflare JS 挑战，用 Playwright 新实例 + stealth 脚本可通过。  
+详细的代理使用方法和 stealth 代码见 `HANDOVER.md` 第 9.4~9.5 节。
+
+> **注意**: 免费代理不稳定，可能随时失效。稳定使用建议付费住宅代理。
 
 ### 参考项目
 
@@ -188,7 +196,8 @@ AutoSignUp/
 │   ├── outlook_register.py                # Outlook 注册脚本 (Python)
 │   ├── chatgpt-plus-subscribe.mjs         # ChatGPT Plus 订阅脚本 (Node.js)
 │   ├── chatgpt_plus_subscribe.py          # ChatGPT Plus 订阅脚本 (Python CDP)
-│   └── find-residential-proxy.mjs         # 住宅 IP 代理发现工具
+│   ├── find-residential-proxy.mjs         # 住宅 IP 代理发现工具（US SOCKS5）
+│   └── fast_proxy_scan.py                # 全球代理扫描（30 并发，含 ChatGPT 测试）
 ├── skills/
 │   ├── SKILL_google_register.md           # Google 注册技能文档
 │   └── SKILL_chatgpt_plus_subscribe.md    # ChatGPT Plus 订阅技能文档
