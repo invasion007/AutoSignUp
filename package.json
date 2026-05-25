@@ -8,8 +8,15 @@
     "signup:headless": "HEADLESS=true node scripts/google-signup.mjs"
   },
   "dependencies": {
+    "@mr_ozio/playwright-stealth": "^1.0.0",
     "playwright": "^1.52.0"
   },
-  "keywords": ["google", "signup", "automation", "playwright", "accessibility"],
+  "keywords": [
+    "google",
+    "signup",
+    "automation",
+    "playwright",
+    "accessibility"
+  ],
   "license": "MIT"
 }
