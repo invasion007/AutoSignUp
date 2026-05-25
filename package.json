@@ -8,6 +8,8 @@
     "signup:headless": "HEADLESS=true node scripts/google-signup.mjs",
     "subscribe": "node scripts/chatgpt-plus-subscribe.mjs",
     "subscribe:cdp": "CDP=true node scripts/chatgpt-plus-subscribe.mjs",
+    "subscribe:card": "PAYMENT=card node scripts/chatgpt-plus-subscribe.mjs",
+    "subscribe:card:cdp": "CDP=true PAYMENT=card node scripts/chatgpt-plus-subscribe.mjs",
     "subscribe:headless": "HEADLESS=true node scripts/chatgpt-plus-subscribe.mjs",
     "subscribe:auto": "AUTO_SUBMIT=true node scripts/chatgpt-plus-subscribe.mjs"
   },

@@ -22,6 +22,12 @@
     "cvc": "123",
     "cardholderName": "YOUR NAME",
     "country": "United States",
-    "postalCode": "10001"
+    "postalCode": "10001",
+    "billingAddress": {
+      "address1": "Broadway",
+      "city": "New York",
+      "region": "New York",
+      "postalCode": "10007"
+    }
   }
 }

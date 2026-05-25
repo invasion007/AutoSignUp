@@ -17,17 +17,26 @@
 
 ## ChatGPT Plus 订阅
 
-### 订阅流程概览
+> 参考 [FoundZiGu/GuJumpgate](https://github.com/FoundZiGu/GuJumpgate) 项目（2466 Star，100% 成功率）
 
-| 步骤 | 页面 | 内容 | 自动化 |
-|------|------|------|--------|
-| 1 | `chatgpt.com` | 确认已登录 | 可自动 / CDP |
-| 2 | `chatgpt.com/#pricing` | 导航到升级页面 | 可自动 |
-| 3 | 选择 Plus 计划 | 点击 "Get Plus" | 可自动 |
-| 4 | `pay.openai.com` | Stripe Checkout 支付 | 可自动 |
-| 5 | 填写信用卡信息 | 卡号/有效期/CVC | 可自动 |
-| 6 | 提交订阅 | 确认支付 | 可自动 |
-| 7 | 验证 Plus 状态 | 确认订阅成功 | 可自动 |
+### 核心方法
+
+不通过 UI 导航，**直接调用 ChatGPT 后端 API** 创建 Stripe Checkout 会话：
+
+```
+1. GET /api/auth/session → accessToken
+2. POST /backend-api/payments/checkout → checkout_session_id
+3. 打开 https://chatgpt.com/checkout/{entity}/{session_id}
+4. 在 Stripe 页面填写账单/支付信息
+5. 提交订阅
+```
+
+### 两种支付路径
+
+| 路径 | 支付方式 | Promo | 首月价格 | 需要 |
+|------|----------|-------|---------|------|
+| **PayPal（推荐）** | PayPal | plus-1-month-free | **$0** | PayPal 账号 + US 代理 |
+| 信用卡 | Credit/Debit | 无 | $20 | 信用卡信息 |
 
 ### 使用方法
 
@@ -36,27 +45,27 @@
 npm install
 npx playwright install chromium
 
-# 配置信息（包含支付信息）
+# 配置
 cp config.example.json config.json
-# 编辑 config.json 填写你的支付信息
 
-# 运行 — 标准模式
-npm run subscribe
+# PayPal 模式（推荐，含免费试用）
+npm run subscribe                  # 标准模式
+npm run subscribe:cdp              # CDP 连接已登录浏览器（推荐）
 
-# 运行 — CDP 模式（连接已登录的浏览器，推荐）
-npm run subscribe:cdp
+# 信用卡模式
+npm run subscribe:card
+npm run subscribe:card:cdp         # CDP + 信用卡
 
-# 运行 — 自动提交（跳过 30 秒确认等待）
+# 自动提交（跳过 30 秒确认等待）
 npm run subscribe:auto
 
-# 运行 — Python CDP 版本
-python scripts/chatgpt_plus_subscribe.py
+# Python CDP 版本
+python scripts/chatgpt_plus_subscribe.py                  # PayPal
+python scripts/chatgpt_plus_subscribe.py --payment card   # 信用卡
 python scripts/chatgpt_plus_subscribe.py --auto-submit
 ```
 
 ### 配置说明
-
-在 `config.json` 中添加 `payment` 字段：
 
 ```json
 {
@@ -66,8 +75,12 @@ python scripts/chatgpt_plus_subscribe.py --auto-submit
     "expiry": "12/28",
     "cvc": "123",
     "cardholderName": "YOUR NAME",
-    "country": "United States",
-    "postalCode": "10001"
+    "billingAddress": {
+      "address1": "Broadway",
+      "city": "New York",
+      "region": "New York",
+      "postalCode": "10007"
+    }
   }
 }
 ```
@@ -76,7 +89,8 @@ python scripts/chatgpt_plus_subscribe.py --auto-submit
 
 | 项目 | 说明 |
 |------|------|
-| [zxyyang/plus_gopay_gptp-plus](https://github.com/zxyyang/plus_gopay_gptp-plus) | ChatGPT Plus PayPal 通道自动化 |
+| **[FoundZiGu/GuJumpgate](https://github.com/FoundZiGu/GuJumpgate)** | **Chrome 扩展，PayPal 全流程自动化，100% 成功率** |
+| [zxyyang/plus_gopay_gptp-plus](https://github.com/zxyyang/plus_gopay_gptp-plus) | PayPal 通道批量工具 |
 | [DanOps-1/Gpt-Agreement-Payment](https://github.com/DanOps-1/Gpt-Agreement-Payment) | 协议端到端重放工具集 |
 
 ---

@@ -1,34 +1,84 @@
 /**
  * ChatGPT Plus 订阅自动化脚本
  *
- * 自动完成 ChatGPT Plus 的升级/订阅流程：
- *   1. 登录 ChatGPT（已登录则跳过）
- *   2. 导航到升级页面
- *   3. 选择 Plus 计划
- *   4. 在 Stripe Checkout 页面填写支付信息
- *   5. 提交订阅
+ * 参考 FoundZiGu/GuJumpgate 项目的方法，通过 ChatGPT 后端 API 创建
+ * Stripe Checkout 会话，然后自动填写账单信息并提交订阅。
+ *
+ * 两种订阅路径：
+ *   路径 A（推荐）：API 创建 Checkout → PayPal 支付（含免费试用 promo）
+ *   路径 B：API 创建 Checkout → 信用卡支付
  *
  * 用法:
  *   node scripts/chatgpt-plus-subscribe.mjs                    # 标准模式
+ *   CDP=true node scripts/chatgpt-plus-subscribe.mjs           # CDP 连接已打开的 Chrome（推荐）
  *   HEADLESS=true node scripts/chatgpt-plus-subscribe.mjs      # 无界面模式
- *   CDP=true node scripts/chatgpt-plus-subscribe.mjs           # CDP 连接已打开的 Chrome
- *
- * 前提:
- *   - 需要一个已登录 ChatGPT 的浏览器会话（CDP模式），或提供登录凭据
- *   - 需要有效的支付信息（信用卡/借记卡）
+ *   PAYMENT=card node scripts/chatgpt-plus-subscribe.mjs       # 使用信用卡支付
  *
  * 参考项目:
- *   - zxyyang/plus_gopay_gptp-plus（PayPal 通道自动化）
+ *   - FoundZiGu/GuJumpgate（浏览器扩展，PayPal 通道全流程自动化）
+ *   - zxyyang/plus_gopay_gptp-plus（PayPal 通道批量工具）
  *   - DanOps-1/Gpt-Agreement-Payment（协议重放工具集）
  */
 
 import { chromium, devices } from "playwright";
-import { readFileSync, existsSync, mkdirSync, writeFileSync } from "fs";
+import { readFileSync, existsSync, mkdirSync } from "fs";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, "..");
+
+// ---------------------------------------------------------------------------
+// 常量（参考 GuJumpgate plus-checkout.js）
+// ---------------------------------------------------------------------------
+
+const CHECKOUT_API_URL = "https://chatgpt.com/backend-api/payments/checkout";
+const SESSION_API_URL = "/api/auth/session";
+
+const CHECKOUT_PAYLOAD_PAYPAL = {
+  entry_point: "all_plans_pricing_modal",
+  plan_name: "chatgptplusplan",
+  promo_campaign: {
+    promo_campaign_id: "plus-1-month-free",
+    is_coupon_from_query_param: false,
+  },
+  checkout_ui_mode: "hosted",
+  billing_details: {
+    country: "US",
+    currency: "USD",
+  },
+};
+
+const CHECKOUT_PAYLOAD_CARD = {
+  entry_point: "all_plans_pricing_modal",
+  plan_name: "chatgptplusplan",
+  checkout_ui_mode: "custom",
+  billing_details: {
+    country: "US",
+    currency: "USD",
+  },
+};
+
+const US_ADDRESS_SEEDS = [
+  {
+    query: "New York NY",
+    fallback: {
+      address1: "Broadway",
+      city: "New York",
+      region: "New York",
+      postalCode: "10007",
+    },
+  },
+  {
+    query: "Los Angeles CA",
+    fallback: {
+      address1: "Wilshire Blvd",
+      city: "Los Angeles",
+      region: "California",
+      postalCode: "90017",
+    },
+  },
+];
 
 // ---------------------------------------------------------------------------
 // 配置
@@ -41,15 +91,7 @@ function loadConfig() {
     console.error("   cp config.example.json config.json");
     process.exit(1);
   }
-  const config = JSON.parse(readFileSync(configPath, "utf-8"));
-
-  if (!config.payment) {
-    console.error("config.json 中缺少 payment（支付信息）配置。");
-    console.error("请参考 config.example.json 添加 payment 字段。");
-    process.exit(1);
-  }
-
-  return config;
+  return JSON.parse(readFileSync(configPath, "utf-8"));
 }
 
 // ---------------------------------------------------------------------------
@@ -73,19 +115,6 @@ async function saveScreenshot(page, name) {
   await page.screenshot({ path, fullPage: true }).catch(() => {});
   logInfo(`截图已保存: ${path}`);
   return path;
-}
-
-async function waitAndClick(page, selector, options = {}) {
-  const { timeout = 10000, description = selector } = options;
-  try {
-    await page.waitForSelector(selector, { state: "visible", timeout });
-    await page.click(selector);
-    logInfo(`已点击: ${description}`);
-    return true;
-  } catch {
-    logInfo(`未找到或无法点击: ${description}`);
-    return false;
-  }
 }
 
 async function safeType(page, selector, text, options = {}) {
@@ -135,422 +164,431 @@ async function connectBrowser() {
 }
 
 // ---------------------------------------------------------------------------
-// 步骤 2: 确认已登录 ChatGPT
+// 步骤 2: 确认已登录并获取 accessToken
 // ---------------------------------------------------------------------------
 
-async function ensureLoggedIn(page, config) {
-  log(1, "检查 ChatGPT 登录状态...");
+async function getAccessToken(page) {
+  log(1, "获取 ChatGPT 登录会话...");
 
   await page.goto("https://chatgpt.com", { waitUntil: "domcontentloaded", timeout: 30000 });
   await page.waitForTimeout(3000);
 
   const currentUrl = page.url();
-
   if (currentUrl.includes("auth") || currentUrl.includes("login")) {
-    log(1, "未登录，尝试使用配置中的凭据登录...");
-
-    if (!config.chatgptLogin) {
-      console.error("");
-      console.error("=== 需要登录 ChatGPT ===");
-      console.error("请在 config.json 中添加 chatgptLogin 配置，或使用 CDP 模式连接已登录的浏览器。");
-      console.error("");
-      console.error('示例 config.json:');
-      console.error('  "chatgptLogin": {');
-      console.error('    "email": "your-email@gmail.com",');
-      console.error('    "password": "your-password"');
-      console.error("  }");
-      console.error("");
-      console.error("或使用 CDP 模式: CDP=true node scripts/chatgpt-plus-subscribe.mjs");
-      process.exit(1);
-    }
-
-    await loginChatGPT(page, config.chatgptLogin);
-  } else {
-    log(1, "已登录 ChatGPT");
+    throw new Error("未登录 ChatGPT！请先在浏览器中登录，或使用 CDP 模式连接已登录的浏览器。");
   }
+
+  log(1, "已登录 ChatGPT，正在获取 accessToken...");
+
+  // 通过页面内 fetch 调用获取 session（参考 GuJumpgate）
+  const session = await page.evaluate(async () => {
+    const resp = await fetch("/api/auth/session", { credentials: "include" });
+    return resp.json();
+  });
+
+  const accessToken = session?.accessToken;
+  if (!accessToken) {
+    throw new Error("无法获取 accessToken，请确认已登录 ChatGPT。");
+  }
+
+  logInfo("accessToken 获取成功");
+  return accessToken;
 }
 
-async function loginChatGPT(page, loginConfig) {
-  logInfo("开始 ChatGPT 登录流程...");
+// ---------------------------------------------------------------------------
+// 步骤 3: 通过 API 创建 Checkout 会话（核心 — 参考 GuJumpgate）
+// ---------------------------------------------------------------------------
 
-  const loginButton = page.locator('button:has-text("Log in"), a:has-text("Log in")').first();
-  if (await loginButton.isVisible({ timeout: 5000 }).catch(() => false)) {
-    await loginButton.click();
-    await page.waitForTimeout(2000);
+async function createCheckoutSession(page, accessToken, paymentMethod) {
+  log(2, `通过 API 创建 Checkout 会话 (${paymentMethod})...`);
+
+  const payload = paymentMethod === "paypal"
+    ? CHECKOUT_PAYLOAD_PAYPAL
+    : CHECKOUT_PAYLOAD_CARD;
+
+  const result = await page.evaluate(async ({ url, token, body }) => {
+    const resp = await fetch(url, {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+    const data = await resp.json().catch(() => ({}));
+    return { ok: resp.ok, status: resp.status, data };
+  }, { url: CHECKOUT_API_URL, token: accessToken, body: payload });
+
+  if (!result.ok || !result.data?.checkout_session_id) {
+    const detail = result.data?.detail || result.data?.message || `HTTP ${result.status}`;
+    throw new Error(`创建 Checkout 会话失败：${detail}`);
   }
 
-  // Auth0 login page
-  const emailInput = page.locator('input[name="email"], input[type="email"], #email-input').first();
-  if (await emailInput.isVisible({ timeout: 10000 }).catch(() => false)) {
-    await emailInput.fill(loginConfig.email);
-    logInfo(`已输入邮箱: ${loginConfig.email}`);
+  const sessionId = result.data.checkout_session_id;
+  const processorEntity = paymentMethod === "paypal" ? "openai_ie" : "openai_llc";
+  const checkoutUrl = `https://chatgpt.com/checkout/${processorEntity}/${sessionId}`;
 
-    const continueBtn = page.locator('button[type="submit"], button:has-text("Continue")').first();
-    await continueBtn.click();
-    await page.waitForTimeout(2000);
-  }
+  // 查找 hosted checkout URL（Stripe 页面直接链接）
+  let hostedCheckoutUrl = "";
+  const findUrl = (obj) => {
+    if (!obj || typeof obj !== "object") return;
+    for (const [key, val] of Object.entries(obj)) {
+      if (typeof val === "string" && (val.includes("pay.openai.com") || val.includes("checkout.stripe.com"))) {
+        hostedCheckoutUrl = val;
+        return;
+      }
+      if (typeof val === "object") findUrl(val);
+    }
+  };
+  findUrl(result.data);
 
-  const passwordInput = page.locator('input[name="password"], input[type="password"]').first();
-  if (await passwordInput.isVisible({ timeout: 10000 }).catch(() => false)) {
-    await passwordInput.fill(loginConfig.password);
-    logInfo("已输入密码");
+  log(2, "Checkout 会话创建成功！");
+  logInfo(`Session ID: ${sessionId}`);
+  logInfo(`Checkout URL: ${checkoutUrl}`);
+  if (hostedCheckoutUrl) logInfo(`Hosted URL: ${hostedCheckoutUrl}`);
 
-    const submitBtn = page.locator('button[type="submit"], button:has-text("Continue"), button:has-text("Log in")').first();
-    await submitBtn.click();
-    await page.waitForTimeout(5000);
-  }
+  return {
+    sessionId,
+    checkoutUrl,
+    hostedCheckoutUrl,
+    processorEntity,
+    rawData: result.data,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 步骤 4: 打开 Checkout 页面
+// ---------------------------------------------------------------------------
+
+async function openCheckoutPage(page, checkoutInfo, paymentMethod) {
+  log(3, "打开 Checkout 页面...");
+
+  // PayPal 模式优先使用 hosted checkout URL
+  const targetUrl = paymentMethod === "paypal" && checkoutInfo.hostedCheckoutUrl
+    ? checkoutInfo.hostedCheckoutUrl
+    : checkoutInfo.checkoutUrl;
+
+  logInfo(`导航到: ${targetUrl}`);
+  await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
+  await page.waitForTimeout(5000);
+
+  await saveScreenshot(page, "checkout-page");
 
   const url = page.url();
-  if (url.includes("chatgpt.com") && !url.includes("auth")) {
-    logInfo("ChatGPT 登录成功！");
-  } else {
-    logInfo("登录可能需要额外验证（如 CAPTCHA），请检查浏览器");
-    await saveScreenshot(page, "login-issue");
-  }
+  logInfo(`当前页面: ${url}`);
+
+  return url;
 }
 
 // ---------------------------------------------------------------------------
-// 步骤 3: 导航到升级页面
+// 步骤 5A: PayPal 支付流程（参考 GuJumpgate）
 // ---------------------------------------------------------------------------
 
-async function navigateToUpgrade(page) {
-  log(2, "导航到 ChatGPT Plus 升级页面...");
+async function handlePayPalCheckout(page, config) {
+  log(4, "PayPal 支付流程...");
 
-  // 方式1: 直接访问升级页面URL
-  await page.goto("https://chatgpt.com/#pricing", {
-    waitUntil: "domcontentloaded",
-    timeout: 30000,
-  });
-  await page.waitForTimeout(3000);
-
-  let foundUpgrade = false;
-
-  // 检查是否在定价页面
-  const plusButton = page.locator(
-    'button:has-text("Get Plus"), button:has-text("Upgrade to Plus"), button:has-text("Subscribe"), a:has-text("Get Plus"), a:has-text("Upgrade to Plus")'
-  ).first();
-
-  if (await plusButton.isVisible({ timeout: 5000 }).catch(() => false)) {
-    logInfo("找到 Plus 升级按钮");
-    foundUpgrade = true;
-  }
-
-  if (!foundUpgrade) {
-    // 方式2: 通过侧边栏/设置菜单
-    logInfo("尝试通过侧边栏查找升级选项...");
-
-    // 点击头像/设置
-    const profileBtn = page.locator(
-      'button[aria-label="User menu"], button[data-testid="profile-button"], img[alt="User"]'
-    ).first();
-
-    if (await profileBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
-      await profileBtn.click();
-      await page.waitForTimeout(1000);
-    }
-
-    const upgradeOption = page.locator(
-      'a:has-text("Upgrade"), button:has-text("Upgrade"), a:has-text("My plan"), [data-testid="upgrade-button"]'
-    ).first();
-
-    if (await upgradeOption.isVisible({ timeout: 3000 }).catch(() => false)) {
-      await upgradeOption.click();
-      await page.waitForTimeout(3000);
-      foundUpgrade = true;
-    }
-  }
-
-  if (!foundUpgrade) {
-    // 方式3: 直接访问 settings 页面
-    logInfo("尝试通过设置页面...");
-    await page.goto("https://chatgpt.com/settings", {
-      waitUntil: "domcontentloaded",
-      timeout: 30000,
-    });
-    await page.waitForTimeout(2000);
-
-    const subscriptionLink = page.locator(
-      'a:has-text("Subscription"), a:has-text("Manage subscription"), a:has-text("Upgrade")'
-    ).first();
-
-    if (await subscriptionLink.isVisible({ timeout: 5000 }).catch(() => false)) {
-      await subscriptionLink.click();
-      await page.waitForTimeout(3000);
-      foundUpgrade = true;
-    }
-  }
-
-  await saveScreenshot(page, "upgrade-page");
-  return foundUpgrade;
-}
-
-// ---------------------------------------------------------------------------
-// 步骤 4: 选择 Plus 计划并进入 Stripe Checkout
-// ---------------------------------------------------------------------------
-
-async function selectPlusPlan(page) {
-  log(3, "选择 Plus 计划...");
-
-  // 点击 "Get Plus" / "Upgrade to Plus" / "Subscribe" 按钮
-  const selectors = [
-    'button:has-text("Get Plus")',
-    'button:has-text("Upgrade to Plus")',
-    'button:has-text("Subscribe to Plus")',
-    'button:has-text("Upgrade")',
-    'a:has-text("Get Plus")',
-    'a:has-text("Upgrade to Plus")',
-    '[data-testid="select-plus-button"]',
+  // 选择 PayPal 支付方式（参考 GuJumpgate 选择器）
+  const paypalSelectors = [
+    '[data-testid="paypal-accordion-item-button"]',
+    '.paypal-accordion-item button',
+    'button:has-text("PayPal")',
+    '[aria-label*="PayPal"]',
+    'div:has-text("PayPal"):not(:has(div:has-text("PayPal")))',
   ];
 
-  for (const selector of selectors) {
-    const el = page.locator(selector).first();
-    if (await el.isVisible({ timeout: 2000 }).catch(() => false)) {
-      logInfo(`找到按钮: ${selector}`);
-      await el.click();
-      await page.waitForTimeout(5000);
-
-      const url = page.url();
-      logInfo(`当前 URL: ${url}`);
-
-      // 检查是否跳转到 Stripe Checkout
-      if (
-        url.includes("pay.openai.com") ||
-        url.includes("checkout.stripe.com") ||
-        url.includes("stripe")
-      ) {
-        log(3, "已进入 Stripe Checkout 页面！");
-        return true;
+  let paypalSelected = false;
+  for (const sel of paypalSelectors) {
+    try {
+      const el = page.locator(sel).first();
+      if (await el.isVisible({ timeout: 3000 })) {
+        await el.click();
+        await page.waitForTimeout(1000);
+        await el.click(); // 双击确认（参考 GuJumpgate）
+        paypalSelected = true;
+        logInfo(`已选择 PayPal: ${sel}`);
+        break;
       }
-
-      // 等待可能的新标签页打开（Stripe checkout 可能在新标签页）
-      break;
+    } catch {
+      continue;
     }
   }
 
-  // 检查是否有新页面/弹窗打开
+  if (!paypalSelected) {
+    logInfo("未找到 PayPal 选项，尝试继续填写账单信息...");
+  }
+
   await page.waitForTimeout(3000);
-  await saveScreenshot(page, "after-select-plus");
 
-  const url = page.url();
-  if (url.includes("pay.openai.com") || url.includes("checkout.stripe.com")) {
-    return true;
-  }
+  // 填写账单地址（参考 GuJumpgate address-sources.js）
+  const address = config.payment?.billingAddress || US_ADDRESS_SEEDS[0].fallback;
 
-  logInfo("等待 Stripe Checkout 页面加载...");
+  // 选择国家为 US
+  await selectCountryUS(page);
+
+  // 填写地址字段（参考 GuJumpgate 选择器）
+  await safeType(page, '#billingAddressLine1, input[name="billingAddressLine1"]', address.address1 || address.street || "Broadway", { timeout: 5000 });
+  await safeType(page, '#billingLocality, input[name="billingLocality"]', address.city || "New York", { timeout: 3000 });
+  await safeType(page, '#billingPostalCode, input[name="billingPostalCode"]', address.postalCode || address.zip || "10007", { timeout: 3000 });
+
+  // 选择州
+  const stateValue = address.region || address.state || "New York";
   try {
-    await page.waitForURL(
-      (u) => u.href.includes("pay.openai.com") || u.href.includes("checkout.stripe.com"),
-      { timeout: 30000 }
-    );
-    return true;
+    const stateSelect = page.locator('#billingAdministrativeArea, select[name="billingAdministrativeArea"]').first();
+    if (await stateSelect.isVisible({ timeout: 3000 })) {
+      await stateSelect.selectOption({ label: stateValue });
+      logInfo(`已选择州: ${stateValue}`);
+    }
   } catch {
-    logInfo("未自动跳转到 Stripe Checkout");
-    return false;
+    logInfo("未找到州选择框，尝试文本输入...");
+    await safeType(page, 'input[name="billingAdministrativeArea"]', stateValue, { timeout: 3000 });
   }
+
+  // 填写持卡人姓名（如果有）
+  if (config.payment?.cardholderName) {
+    await fillFullName(page, config.payment.cardholderName);
+  }
+
+  // 勾选服务条款（参考 GuJumpgate）
+  await checkTermsOfService(page);
+
+  await page.waitForTimeout(2000);
+  await saveScreenshot(page, "paypal-billing-filled");
+
+  log(4, "PayPal 账单信息填写完成");
 }
 
 // ---------------------------------------------------------------------------
-// 步骤 5: 填写 Stripe Checkout 支付信息
+// 步骤 5B: 信用卡支付流程
 // ---------------------------------------------------------------------------
 
-async function fillStripeCheckout(page, payment) {
-  log(4, "填写 Stripe Checkout 支付信息...");
+async function handleCardCheckout(page, config) {
+  log(4, "信用卡支付流程...");
 
-  await page.waitForTimeout(3000);
-  await saveScreenshot(page, "stripe-checkout");
+  const payment = config.payment;
 
-  const url = page.url();
-  logInfo(`Stripe Checkout URL: ${url}`);
-
-  // --- 邮箱 ---
+  // 邮箱
   if (payment.email) {
-    const emailFilled = await safeType(page, '#email, input[name="email"]', payment.email, {
-      timeout: 5000,
-    });
+    const emailFilled = await safeType(page, '#email, input[name="email"]', payment.email, { timeout: 5000 });
     if (emailFilled) logInfo(`已填写邮箱: ${payment.email}`);
   }
 
-  // --- 信用卡信息 ---
-  // Stripe Checkout 页面的卡号输入可能在 iframe 中
-  // 先尝试直接输入（Stripe hosted checkout 通常不用 iframe）
-
-  // 卡号
-  let cardFilled = false;
-
-  // 尝试方式1: 直接在页面上输入（Stripe Checkout hosted page）
-  cardFilled = await safeType(
+  // 卡号（尝试多种选择器）
+  let cardFilled = await safeType(
     page,
-    '#cardNumber, input[name="cardNumber"], input[placeholder*="card number"], input[autocomplete="cc-number"]',
+    '#cardNumber, input[name="cardNumber"], input[autocomplete="cc-number"]',
     payment.cardNumber,
     { timeout: 5000 }
   );
 
-  // 尝试方式2: 通过 iframe (Stripe Elements)
+  // 尝试 Stripe iframe
   if (!cardFilled) {
     logInfo("尝试通过 Stripe iframe 填写卡号...");
-    const frames = page.frames();
-    for (const frame of frames) {
-      const frameUrl = frame.url();
-      if (frameUrl.includes("stripe.com") || frameUrl.includes("js.stripe.com")) {
-        const cardInput = frame.locator(
-          'input[name="cardnumber"], input[name="cardNumber"], input[placeholder*="card number"]'
-        ).first();
-        if (await cardInput.isVisible({ timeout: 3000 }).catch(() => false)) {
-          await cardInput.fill(payment.cardNumber);
-          cardFilled = true;
-          logInfo("通过 iframe 填写了卡号");
-          break;
-        }
+    for (const frame of page.frames()) {
+      if (frame.url().includes("stripe.com")) {
+        try {
+          const cardInput = frame.locator('input[name="cardnumber"], input[name="cardNumber"]').first();
+          if (await cardInput.isVisible({ timeout: 3000 })) {
+            await cardInput.fill(payment.cardNumber);
+            cardFilled = true;
+            logInfo("通过 iframe 填写了卡号");
+            break;
+          }
+        } catch { continue; }
       }
     }
   }
 
-  if (!cardFilled) {
-    logInfo("⚠️ 无法自动填写卡号，请手动输入");
-    await saveScreenshot(page, "card-input-issue");
+  if (cardFilled) logInfo("已填写卡号");
+  else logInfo("无法自动填写卡号，请手动输入");
+
+  // 有效期
+  if (await safeType(page, '#cardExpiry, input[name="cardExpiry"], input[autocomplete="cc-exp"]', payment.expiry, { timeout: 3000 })) {
+    logInfo("已填写有效期");
   }
 
-  // 有效期 (MM/YY)
-  const expiryFilled = await safeType(
-    page,
-    '#cardExpiry, input[name="cardExpiry"], input[placeholder*="MM"], input[autocomplete="cc-exp"]',
-    payment.expiry,
-    { timeout: 3000 }
-  );
-  if (expiryFilled) logInfo("已填写有效期");
-
   // CVC
-  const cvcFilled = await safeType(
-    page,
-    '#cardCvc, input[name="cardCvc"], input[placeholder*="CVC"], input[autocomplete="cc-csc"]',
-    payment.cvc,
-    { timeout: 3000 }
-  );
-  if (cvcFilled) logInfo("已填写 CVC");
+  if (await safeType(page, '#cardCvc, input[name="cardCvc"], input[autocomplete="cc-csc"]', payment.cvc, { timeout: 3000 })) {
+    logInfo("已填写 CVC");
+  }
 
   // 持卡人姓名
   if (payment.cardholderName) {
-    const nameFilled = await safeType(
-      page,
-      '#billingName, input[name="billingName"], input[placeholder*="name on card"], input[autocomplete="cc-name"]',
-      payment.cardholderName,
-      { timeout: 3000 }
-    );
-    if (nameFilled) logInfo(`已填写持卡人姓名: ${payment.cardholderName}`);
+    await fillFullName(page, payment.cardholderName);
   }
 
   // 国家
-  if (payment.country) {
-    const countrySelect = page.locator(
-      '#billingCountry, select[name="billingCountry"], select[name="billingAddressCountry"]'
-    ).first();
-    if (await countrySelect.isVisible({ timeout: 3000 }).catch(() => false)) {
-      await countrySelect.selectOption({ label: payment.country });
-      logInfo(`已选择国家: ${payment.country}`);
-    }
-  }
+  await selectCountryUS(page);
 
-  // 邮政编码
+  // 邮编
   if (payment.postalCode) {
-    const zipFilled = await safeType(
-      page,
-      '#billingPostalCode, input[name="billingPostalCode"], input[name="postal"], input[placeholder*="ZIP"], input[autocomplete="postal-code"]',
-      payment.postalCode,
-      { timeout: 3000 }
-    );
-    if (zipFilled) logInfo(`已填写邮编: ${payment.postalCode}`);
+    await safeType(page, '#billingPostalCode, input[name="billingPostalCode"]', payment.postalCode, { timeout: 3000 });
   }
 
-  await saveScreenshot(page, "stripe-filled");
-  log(4, "支付信息填写完成");
+  // 服务条款
+  await checkTermsOfService(page);
 
-  return cardFilled;
+  await saveScreenshot(page, "card-billing-filled");
+  log(4, "信用卡信息填写完成");
 }
 
 // ---------------------------------------------------------------------------
-// 步骤 6: 确认并提交订阅
+// 步骤 6: 提交订阅（参考 GuJumpgate 选择器）
 // ---------------------------------------------------------------------------
 
 async function submitSubscription(page, autoSubmit) {
-  log(5, "准备提交订阅...");
+  log(5, "提交订阅...");
 
   if (!autoSubmit) {
     console.log("");
     console.log("╔══════════════════════════════════════════════════╗");
-    console.log("║        请检查支付信息是否正确                       ║");
-    console.log("║        确认无误后，脚本将自动提交                    ║");
-    console.log("║                                                  ║");
-    console.log("║  如果需要手动调整，请在浏览器中修改后               ║");
-    console.log("║  等待 30 秒后脚本将自动提交                        ║");
+    console.log("║   请检查页面上的支付信息是否正确                    ║");
+    console.log("║   30 秒后自动提交，或设置 AUTO_SUBMIT=true 跳过    ║");
     console.log("╚══════════════════════════════════════════════════╝");
     console.log("");
-
     await new Promise((r) => setTimeout(r, 30000));
   }
 
-  // 尝试点击提交按钮
+  // 参考 GuJumpgate 的提交按钮选择器
   const submitSelectors = [
+    'button[data-testid="submit-button"]',
+    'button[data-testid="hosted-payment-submit-button"]',
+    'button[data-atomic-wait-intent="Submit_Email"]',
+    'button.SubmitButton--complete',
     'button:has-text("Subscribe")',
     'button:has-text("Pay")',
     'button:has-text("Start subscription")',
-    'button:has-text("确认")',
+    'button:has-text("Next")',
+    'button:has-text("Continue")',
+    'button:has-text("Agree")',
     'button[type="submit"]',
-    '.SubmitButton',
-    '.SubmitButton-IconContainer',
   ];
 
-  for (const selector of submitSelectors) {
-    const btn = page.locator(selector).first();
-    if (await btn.isVisible({ timeout: 2000 }).catch(() => false)) {
-      logInfo(`点击提交按钮: ${selector}`);
-      await btn.click();
-
-      log(5, "已提交订阅，等待处理...");
-      await page.waitForTimeout(10000);
-      await saveScreenshot(page, "after-submit");
-      return true;
-    }
+  for (const sel of submitSelectors) {
+    try {
+      const btn = page.locator(sel).first();
+      if (await btn.isVisible({ timeout: 2000 })) {
+        const isDisabled = await btn.isDisabled();
+        if (!isDisabled) {
+          logInfo(`点击提交: ${sel}`);
+          await btn.click();
+          log(5, "已提交订阅！");
+          await page.waitForTimeout(10000);
+          await saveScreenshot(page, "after-submit");
+          return true;
+        }
+      }
+    } catch { continue; }
   }
 
-  logInfo("⚠️ 未找到提交按钮，请手动点击提交");
+  logInfo("未找到可点击的提交按钮，请手动提交");
   await saveScreenshot(page, "no-submit-button");
   return false;
 }
 
 // ---------------------------------------------------------------------------
-// 步骤 7: 验证订阅结果
+// 辅助函数（参考 GuJumpgate）
+// ---------------------------------------------------------------------------
+
+async function selectCountryUS(page) {
+  // 尝试多种国家选择方式
+  const countrySelectors = [
+    '#billingCountry',
+    'select[name="billingCountry"]',
+    'select[name="billingAddressCountry"]',
+  ];
+
+  for (const sel of countrySelectors) {
+    try {
+      const el = page.locator(sel).first();
+      if (await el.isVisible({ timeout: 3000 })) {
+        await el.selectOption("US");
+        logInfo("已选择国家: US");
+        return true;
+      }
+    } catch { continue; }
+  }
+
+  // 尝试自定义 dropdown（非 select 元素）
+  try {
+    const dropdown = page.locator('[data-testid="country-dropdown"], [aria-label*="Country"], [aria-label*="country"]').first();
+    if (await dropdown.isVisible({ timeout: 3000 })) {
+      await dropdown.click();
+      await page.waitForTimeout(500);
+      const usOption = page.locator('text="United States"').first();
+      if (await usOption.isVisible({ timeout: 3000 })) {
+        await usOption.click();
+        logInfo("已选择国家: United States");
+        return true;
+      }
+    }
+  } catch { /* ignore */ }
+
+  return false;
+}
+
+async function fillFullName(page, name) {
+  const nameSelectors = [
+    '#billingName',
+    'input[name="billingName"]',
+    'input[autocomplete="cc-name"]',
+    'input[autocomplete="name"]',
+  ];
+
+  for (const sel of nameSelectors) {
+    if (await safeType(page, sel, name, { timeout: 3000 })) {
+      logInfo(`已填写姓名: ${name}`);
+      return true;
+    }
+  }
+  return false;
+}
+
+async function checkTermsOfService(page) {
+  // 参考 GuJumpgate: #termsOfServiceConsentCheckbox
+  try {
+    const checkbox = page.locator('#termsOfServiceConsentCheckbox, input[name="termsOfServiceConsent"]').first();
+    if (await checkbox.isVisible({ timeout: 3000 })) {
+      const isChecked = await checkbox.isChecked();
+      if (!isChecked) {
+        await checkbox.click();
+        logInfo("已勾选服务条款");
+      }
+    }
+  } catch { /* ignore */ }
+}
+
+// ---------------------------------------------------------------------------
+// 步骤 7: 验证结果
 // ---------------------------------------------------------------------------
 
 async function verifySubscription(page) {
   log(6, "验证订阅结果...");
-
   await page.waitForTimeout(5000);
+
   const url = page.url();
   logInfo(`当前 URL: ${url}`);
 
-  // 检查是否返回 ChatGPT 页面
   if (url.includes("chatgpt.com")) {
     logInfo("已返回 ChatGPT 页面");
-
-    // 检查是否显示 Plus 标识
-    const plusBadge = page.locator(
-      'text=Plus, [data-testid="plus-badge"], .plus-indicator'
-    ).first();
-    if (await plusBadge.isVisible({ timeout: 5000 }).catch(() => false)) {
-      log(6, "🎉 ChatGPT Plus 订阅成功！");
-      return true;
-    }
   }
-
-  // 检查 Stripe 成功页面
+  if (url.includes("paypal.com")) {
+    logInfo("已跳转到 PayPal 页面，请在 PayPal 中完成支付");
+    console.log("");
+    console.log("╔══════════════════════════════════════════════════╗");
+    console.log("║   请在 PayPal 页面中登录并确认支付                 ║");
+    console.log("║   支付完成后会自动返回 ChatGPT                    ║");
+    console.log("╚══════════════════════════════════════════════════╝");
+    console.log("");
+    return "paypal_redirect";
+  }
   if (url.includes("success") || url.includes("thank")) {
-    log(6, "🎉 支付成功页面已显示！");
-    return true;
+    log(6, "支付成功！");
+    return "success";
   }
 
   await saveScreenshot(page, "verify-result");
-  logInfo("请手动确认订阅是否成功");
-  return false;
+  return "unknown";
 }
 
 // ---------------------------------------------------------------------------
@@ -559,19 +597,21 @@ async function verifySubscription(page) {
 
 async function main() {
   const config = loadConfig();
-  const payment = config.payment;
+  const paymentMethod = process.env.PAYMENT === "card" ? "card" : "paypal";
   const autoSubmit = process.env.AUTO_SUBMIT === "true";
 
   console.log("╔══════════════════════════════════════════════════╗");
-  console.log("║       ChatGPT Plus 订阅自动化工具                  ║");
+  console.log("║    ChatGPT Plus 订阅自动化（GuJumpgate 方案）      ║");
   console.log("╚══════════════════════════════════════════════════╝");
   console.log("");
-  console.log(`模式: ${process.env.CDP === "true" ? "CDP（连接已打开的浏览器）" : "独立浏览器"}`);
-  console.log(`自动提交: ${autoSubmit ? "是" : "否（默认等待30秒后提交）"}`);
+  console.log(`连接模式: ${process.env.CDP === "true" ? "CDP（连接已打开的浏览器）" : "独立浏览器"}`);
+  console.log(`支付方式: ${paymentMethod === "paypal" ? "PayPal（含免费试用 promo）" : "信用卡"}`);
+  console.log(`自动提交: ${autoSubmit ? "是" : "否（等待30秒确认）"}`);
   console.log("");
 
-  if (!autoSubmit) {
-    console.log("提示: 设置 AUTO_SUBMIT=true 可跳过确认直接提交");
+  if (paymentMethod === "paypal") {
+    console.log(">>> PayPal 模式：使用 plus-1-month-free promo 获得免费试用");
+    console.log(">>> 首月 $0，之后 $20/月（可随时取消）");
     console.log("");
   }
 
@@ -586,39 +626,38 @@ async function main() {
   }
 
   try {
-    // 步骤 1: 确认已登录
-    await ensureLoggedIn(page, config);
+    // 步骤 1: 获取 accessToken
+    const accessToken = await getAccessToken(page);
 
-    // 步骤 2: 导航到升级页面
-    const foundUpgrade = await navigateToUpgrade(page);
-    if (!foundUpgrade) {
-      logInfo("⚠️ 未找到升级入口，尝试直接选择 Plus 计划...");
-    }
+    // 步骤 2: 通过 API 创建 Checkout 会话
+    const checkoutInfo = await createCheckoutSession(page, accessToken, paymentMethod);
 
-    // 步骤 3: 选择 Plus 计划
-    const enteredCheckout = await selectPlusPlan(page);
-    if (!enteredCheckout) {
-      console.error("");
-      console.error("=== 无法进入 Stripe Checkout ===");
-      console.error("可能的原因：");
-      console.error("  1. 账号已经是 Plus 会员");
-      console.error("  2. 页面结构已变化，需要更新选择器");
-      console.error("  3. 需要额外的验证步骤");
-      console.error("");
-      console.error("请尝试在浏览器中手动操作，或使用 CDP 模式。");
-      await saveScreenshot(page, "checkout-failed");
-      process.exit(1);
-    }
+    // 步骤 3: 打开 Checkout 页面
+    await openCheckoutPage(page, checkoutInfo, paymentMethod);
 
     // 步骤 4: 填写支付信息
-    await fillStripeCheckout(page, payment);
+    if (paymentMethod === "paypal") {
+      await handlePayPalCheckout(page, config);
+    } else {
+      await handleCardCheckout(page, config);
+    }
 
     // 步骤 5: 提交订阅
     const submitted = await submitSubscription(page, autoSubmit);
 
     // 步骤 6: 验证结果
     if (submitted) {
-      await verifySubscription(page);
+      const result = await verifySubscription(page);
+      if (result === "paypal_redirect") {
+        logInfo("等待 PayPal 支付完成...");
+        // 等待从 PayPal 返回（最多 10 分钟）
+        try {
+          await page.waitForURL((url) => !url.href.includes("paypal.com"), { timeout: 600000 });
+          await verifySubscription(page);
+        } catch {
+          logInfo("PayPal 支付超时，请手动完成");
+        }
+      }
     }
 
     console.log("");
@@ -627,7 +666,6 @@ async function main() {
     console.log("═══════════════════════════════════════════════════");
     console.log("");
 
-    // 等待用户查看
     if (!isCDP) {
       logInfo("浏览器将在 60 秒后关闭...");
       await page.waitForTimeout(60000);

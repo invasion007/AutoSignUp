@@ -1,22 +1,24 @@
+#!/usr/bin/env python3
 """
-ChatGPT Plus 订阅自动化脚本 (Python CDP 版本)
+ChatGPT Plus 订阅自动化脚本（Python CDP 版本）
 
-通过 CDP 连接已打开的 Chrome 浏览器，自动完成 ChatGPT Plus 订阅流程。
-适用于已经在浏览器中登录了 ChatGPT 的情况。
+参考 FoundZiGu/GuJumpgate 项目的方法，通过 ChatGPT 后端 API 创建
+Stripe Checkout 会话，然后自动填写账单信息并提交订阅。
+
+两种订阅路径：
+  路径 A（推荐）：API 创建 Checkout → PayPal 支付（含免费试用 promo）
+  路径 B：API 创建 Checkout → 信用卡支付
 
 用法:
-    python scripts/chatgpt_plus_subscribe.py
-    python scripts/chatgpt_plus_subscribe.py --cdp-url http://localhost:29229
-    python scripts/chatgpt_plus_subscribe.py --config config.json
-
-前提:
-    - Chrome 浏览器已开启 CDP (远程调试)
-    - 已在浏览器中登录 ChatGPT
-    - config.json 中包含 payment 支付信息
+  python scripts/chatgpt_plus_subscribe.py                        # 默认 PayPal
+  python scripts/chatgpt_plus_subscribe.py --payment card         # 信用卡
+  python scripts/chatgpt_plus_subscribe.py --auto-submit          # 跳过确认
+  python scripts/chatgpt_plus_subscribe.py --cdp-url http://localhost:9222
 
 参考项目:
-    - zxyyang/plus_gopay_gptp-plus
-    - DanOps-1/Gpt-Agreement-Payment
+  - FoundZiGu/GuJumpgate（浏览器扩展，PayPal 通道全流程自动化）
+  - zxyyang/plus_gopay_gptp-plus（PayPal 通道批量工具）
+  - DanOps-1/Gpt-Agreement-Payment（协议重放工具集）
 """
 
 import argparse
@@ -26,458 +28,477 @@ import sys
 import time
 from pathlib import Path
 
-try:
-    from playwright.sync_api import sync_playwright
-except ImportError:
-    print("请先安装 playwright:")
-    print("  pip install playwright")
-    sys.exit(1)
-
+from playwright.sync_api import sync_playwright
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
+# ---------------------------------------------------------------------------
+# 常量（参考 GuJumpgate plus-checkout.js）
+# ---------------------------------------------------------------------------
 
-def load_config(config_path: str) -> dict:
-    """加载配置文件"""
-    path = Path(config_path)
-    if not path.exists():
-        print(f"未找到配置文件: {config_path}")
-        print("请先复制 config.example.json 并填写信息：")
-        print("   cp config.example.json config.json")
-        sys.exit(1)
+CHECKOUT_API_URL = "https://chatgpt.com/backend-api/payments/checkout"
 
-    with open(path, encoding="utf-8") as f:
-        config = json.load(f)
+CHECKOUT_PAYLOAD_PAYPAL = {
+    "entry_point": "all_plans_pricing_modal",
+    "plan_name": "chatgptplusplan",
+    "promo_campaign": {
+        "promo_campaign_id": "plus-1-month-free",
+        "is_coupon_from_query_param": False,
+    },
+    "checkout_ui_mode": "hosted",
+    "billing_details": {
+        "country": "US",
+        "currency": "USD",
+    },
+}
 
-    if "payment" not in config:
-        print("config.json 中缺少 payment（支付信息）配置。")
-        print("请参考 config.example.json 添加 payment 字段。")
-        sys.exit(1)
+CHECKOUT_PAYLOAD_CARD = {
+    "entry_point": "all_plans_pricing_modal",
+    "plan_name": "chatgptplusplan",
+    "checkout_ui_mode": "custom",
+    "billing_details": {
+        "country": "US",
+        "currency": "USD",
+    },
+}
 
-    return config
+US_ADDRESS = {
+    "address1": "Broadway",
+    "city": "New York",
+    "region": "New York",
+    "postalCode": "10007",
+}
 
 
-def log(step: int, message: str) -> None:
-    ts = time.strftime("%H:%M:%S")
-    print(f"[{ts}] 步骤 {step}: {message}")
+# ---------------------------------------------------------------------------
+# 工具
+# ---------------------------------------------------------------------------
+
+def log(step, message):
+    t = time.strftime("%H:%M:%S")
+    print(f"[{t}] 步骤 {step}: {message}")
 
 
-def log_info(message: str) -> None:
-    ts = time.strftime("%H:%M:%S")
-    print(f"[{ts}] ℹ️  {message}")
+def log_info(message):
+    t = time.strftime("%H:%M:%S")
+    print(f"[{t}] ℹ️  {message}")
 
 
-def save_screenshot(page, name: str) -> str:
-    screenshot_dir = PROJECT_ROOT / "screenshots"
-    screenshot_dir.mkdir(exist_ok=True)
-    path = screenshot_dir / f"{name}-{int(time.time())}.png"
+def save_screenshot(page, name):
+    d = PROJECT_ROOT / "screenshots"
+    d.mkdir(exist_ok=True)
+    path = d / f"{name}-{int(time.time())}.png"
     try:
         page.screenshot(path=str(path), full_page=True)
         log_info(f"截图已保存: {path}")
     except Exception:
-        log_info(f"截图失败: {name}")
-    return str(path)
+        pass
+    return path
 
 
-def safe_fill(page, selector: str, text: str, timeout: int = 5000) -> bool:
-    """安全填写输入框"""
+def safe_type(page, selector, text, *, timeout=10000, clear=True):
     try:
-        el = page.wait_for_selector(selector, state="visible", timeout=timeout)
-        if el:
-            el.click(click_count=3)
+        page.wait_for_selector(selector, state="visible", timeout=timeout)
+        if clear:
+            page.click(selector, click_count=3)
             page.keyboard.press("Backspace")
-            page.type(selector, text, delay=50)
-            return True
+        page.type(selector, text, delay=50)
+        return True
     except Exception:
-        pass
-    return False
+        return False
 
 
-def safe_click(page, selector: str, timeout: int = 5000) -> bool:
-    """安全点击元素"""
-    try:
-        el = page.wait_for_selector(selector, state="visible", timeout=timeout)
-        if el:
-            el.click()
-            return True
-    except Exception:
-        pass
-    return False
+def load_config(config_path=None):
+    path = Path(config_path) if config_path else PROJECT_ROOT / "config.json"
+    if not path.exists():
+        print("未找到 config.json，请先复制 config.example.json 并填写信息")
+        sys.exit(1)
+    return json.loads(path.read_text("utf-8"))
 
 
 # ---------------------------------------------------------------------------
-# 步骤实现
+# 步骤 1: 连接浏览器 (CDP)
 # ---------------------------------------------------------------------------
 
+def connect_browser(pw, cdp_url):
+    log(0, f"通过 CDP 连接浏览器: {cdp_url}")
+    browser = pw.chromium.connect_over_cdp(cdp_url)
+    contexts = browser.contexts
+    ctx = contexts[0] if contexts else browser.new_context()
+    pages = ctx.pages
+    page = pages[0] if pages else ctx.new_page()
+    return browser, ctx, page
 
-def check_login(page) -> bool:
-    """检查 ChatGPT 是否已登录"""
-    log(1, "检查 ChatGPT 登录状态...")
+
+# ---------------------------------------------------------------------------
+# 步骤 2: 获取 accessToken
+# ---------------------------------------------------------------------------
+
+def get_access_token(page):
+    log(1, "获取 ChatGPT 登录会话...")
 
     page.goto("https://chatgpt.com", wait_until="domcontentloaded", timeout=30000)
     page.wait_for_timeout(3000)
 
     url = page.url
     if "auth" in url or "login" in url:
-        log(1, "未登录 ChatGPT！请先在浏览器中登录。")
-        return False
+        raise RuntimeError("未登录 ChatGPT！请先在浏览器中登录。")
 
-    log(1, "已登录 ChatGPT")
-    return True
+    log(1, "已登录，正在获取 accessToken...")
+
+    session = page.evaluate("""async () => {
+        const resp = await fetch('/api/auth/session', { credentials: 'include' });
+        return resp.json();
+    }""")
+
+    token = (session or {}).get("accessToken", "")
+    if not token:
+        raise RuntimeError("无法获取 accessToken")
+
+    log_info("accessToken 获取成功")
+    return token
 
 
-def navigate_to_upgrade(page) -> bool:
-    """导航到升级页面"""
-    log(2, "导航到 ChatGPT Plus 升级页面...")
+# ---------------------------------------------------------------------------
+# 步骤 3: 通过 API 创建 Checkout 会话（核心 — 参考 GuJumpgate）
+# ---------------------------------------------------------------------------
 
-    # 方式1: 直接访问定价页面
-    page.goto("https://chatgpt.com/#pricing", wait_until="domcontentloaded", timeout=30000)
-    page.wait_for_timeout(3000)
+def create_checkout_session(page, access_token, payment_method):
+    log(2, f"通过 API 创建 Checkout 会话 ({payment_method})...")
 
-    # 查找 Plus 升级按钮
-    plus_selectors = [
-        'button:has-text("Get Plus")',
-        'button:has-text("Upgrade to Plus")',
-        'button:has-text("Subscribe to Plus")',
-        'a:has-text("Get Plus")',
-        'a:has-text("Upgrade to Plus")',
+    payload = CHECKOUT_PAYLOAD_PAYPAL if payment_method == "paypal" else CHECKOUT_PAYLOAD_CARD
+
+    result = page.evaluate("""async ({ url, token, body }) => {
+        const resp = await fetch(url, {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+                Authorization: 'Bearer ' + token,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(body),
+        });
+        const data = await resp.json().catch(() => ({}));
+        return { ok: resp.ok, status: resp.status, data };
+    }""", {"url": CHECKOUT_API_URL, "token": access_token, "body": payload})
+
+    if not result["ok"] or not result["data"].get("checkout_session_id"):
+        detail = result["data"].get("detail") or result["data"].get("message") or f"HTTP {result['status']}"
+        raise RuntimeError(f"创建 Checkout 会话失败：{detail}")
+
+    session_id = result["data"]["checkout_session_id"]
+    entity = "openai_ie" if payment_method == "paypal" else "openai_llc"
+    checkout_url = f"https://chatgpt.com/checkout/{entity}/{session_id}"
+
+    # 查找 hosted checkout URL
+    hosted_url = ""
+    def find_url(obj):
+        nonlocal hosted_url
+        if hosted_url:
+            return
+        if isinstance(obj, dict):
+            for v in obj.values():
+                if isinstance(v, str) and ("pay.openai.com" in v or "checkout.stripe.com" in v):
+                    hosted_url = v
+                    return
+                find_url(v)
+        elif isinstance(obj, list):
+            for item in obj:
+                find_url(item)
+    find_url(result["data"])
+
+    log(2, "Checkout 会话创建成功！")
+    log_info(f"Session ID: {session_id}")
+    log_info(f"Checkout URL: {checkout_url}")
+    if hosted_url:
+        log_info(f"Hosted URL: {hosted_url}")
+
+    return {
+        "session_id": session_id,
+        "checkout_url": checkout_url,
+        "hosted_url": hosted_url,
+        "entity": entity,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 步骤 4: 打开 Checkout 页面
+# ---------------------------------------------------------------------------
+
+def open_checkout_page(page, checkout_info, payment_method):
+    log(3, "打开 Checkout 页面...")
+
+    target = (checkout_info["hosted_url"] or checkout_info["checkout_url"]) \
+        if payment_method == "paypal" else checkout_info["checkout_url"]
+
+    log_info(f"导航到: {target}")
+    page.goto(target, wait_until="domcontentloaded", timeout=60000)
+    page.wait_for_timeout(5000)
+    save_screenshot(page, "checkout-page")
+
+
+# ---------------------------------------------------------------------------
+# 步骤 5A: PayPal 支付流程
+# ---------------------------------------------------------------------------
+
+def handle_paypal_checkout(page, config):
+    log(4, "PayPal 支付流程...")
+
+    # 选择 PayPal
+    paypal_selectors = [
+        '[data-testid="paypal-accordion-item-button"]',
+        '.paypal-accordion-item button',
     ]
-
-    for sel in plus_selectors:
+    paypal_selected = False
+    for sel in paypal_selectors:
         try:
             el = page.locator(sel).first
-            if el.is_visible(timeout=2000):
-                log_info(f"找到按钮: {sel}")
-                return True
-        except Exception:
-            continue
-
-    # 方式2: 通过侧边栏
-    log_info("尝试通过侧边栏查找升级选项...")
-    profile_selectors = [
-        'button[aria-label="User menu"]',
-        'button[data-testid="profile-button"]',
-        'img[alt="User"]',
-    ]
-
-    for sel in profile_selectors:
-        if safe_click(page, sel, timeout=3000):
-            page.wait_for_timeout(1000)
-            break
-
-    upgrade_selectors = [
-        'a:has-text("Upgrade")',
-        'button:has-text("Upgrade")',
-        'a:has-text("My plan")',
-    ]
-
-    for sel in upgrade_selectors:
-        if safe_click(page, sel, timeout=3000):
-            page.wait_for_timeout(3000)
-            return True
-
-    # 方式3: 设置页面
-    log_info("尝试通过设置页面...")
-    page.goto("https://chatgpt.com/settings", wait_until="domcontentloaded", timeout=30000)
-    page.wait_for_timeout(2000)
-
-    sub_selectors = [
-        'a:has-text("Subscription")',
-        'a:has-text("Manage subscription")',
-        'a:has-text("Upgrade")',
-    ]
-
-    for sel in sub_selectors:
-        if safe_click(page, sel, timeout=5000):
-            page.wait_for_timeout(3000)
-            return True
-
-    save_screenshot(page, "upgrade-page")
-    return False
-
-
-def select_plus_plan(page) -> bool:
-    """选择 Plus 计划并进入 Stripe Checkout"""
-    log(3, "选择 Plus 计划...")
-
-    selectors = [
-        'button:has-text("Get Plus")',
-        'button:has-text("Upgrade to Plus")',
-        'button:has-text("Subscribe to Plus")',
-        'button:has-text("Upgrade")',
-        'a:has-text("Get Plus")',
-        'a:has-text("Upgrade to Plus")',
-    ]
-
-    for sel in selectors:
-        try:
-            el = page.locator(sel).first
-            if el.is_visible(timeout=2000):
-                log_info(f"点击: {sel}")
+            if el.is_visible(timeout=3000):
                 el.click()
-                page.wait_for_timeout(5000)
-
-                url = page.url
-                if "pay.openai.com" in url or "checkout.stripe.com" in url:
-                    log(3, "已进入 Stripe Checkout 页面！")
-                    return True
+                page.wait_for_timeout(1000)
+                el.click()
+                paypal_selected = True
+                log_info(f"已选择 PayPal: {sel}")
                 break
         except Exception:
             continue
 
-    # 等待 Stripe 页面
     page.wait_for_timeout(3000)
-    url = page.url
-    if "pay.openai.com" in url or "checkout.stripe.com" in url:
-        return True
 
+    # 账单地址
+    addr = (config.get("payment") or {}).get("billingAddress") or US_ADDRESS
+    select_country_us(page)
+
+    safe_type(page, '#billingAddressLine1', addr.get("address1", "Broadway"), timeout=5000)
+    safe_type(page, '#billingLocality', addr.get("city", "New York"), timeout=3000)
+    safe_type(page, '#billingPostalCode', addr.get("postalCode", "10007"), timeout=3000)
+
+    # 州
+    state_val = addr.get("region", "New York")
     try:
-        page.wait_for_url(
-            lambda u: "pay.openai.com" in u or "checkout.stripe.com" in u,
-            timeout=30000,
-        )
-        return True
+        sel = page.locator('#billingAdministrativeArea').first
+        if sel.is_visible(timeout=3000):
+            sel.select_option(label=state_val)
+            log_info(f"已选择州: {state_val}")
     except Exception:
-        log_info("未自动跳转到 Stripe Checkout")
-        save_screenshot(page, "checkout-issue")
-        return False
+        safe_type(page, 'input[name="billingAdministrativeArea"]', state_val, timeout=3000)
+
+    # 姓名
+    name = (config.get("payment") or {}).get("cardholderName", "")
+    if name:
+        fill_full_name(page, name)
+
+    # 服务条款
+    check_terms(page)
+
+    page.wait_for_timeout(2000)
+    save_screenshot(page, "paypal-billing-filled")
+    log(4, "PayPal 账单信息填写完成")
 
 
-def fill_stripe_checkout(page, payment: dict) -> bool:
-    """填写 Stripe Checkout 支付信息"""
-    log(4, "填写 Stripe Checkout 支付信息...")
-    page.wait_for_timeout(3000)
-    save_screenshot(page, "stripe-checkout")
+# ---------------------------------------------------------------------------
+# 步骤 5B: 信用卡支付流程
+# ---------------------------------------------------------------------------
 
-    url = page.url
-    log_info(f"Stripe Checkout URL: {url}")
+def handle_card_checkout(page, config):
+    log(4, "信用卡支付流程...")
 
-    # 邮箱
+    payment = config.get("payment", {})
+
     if payment.get("email"):
-        if safe_fill(page, '#email, input[name="email"]', payment["email"]):
+        if safe_type(page, '#email', payment["email"], timeout=5000):
             log_info(f"已填写邮箱: {payment['email']}")
 
-    # 卡号
-    card_filled = safe_fill(
-        page,
-        '#cardNumber, input[name="cardNumber"], input[autocomplete="cc-number"]',
-        payment["cardNumber"],
-    )
+    if payment.get("cardNumber"):
+        if safe_type(page, '#cardNumber', payment["cardNumber"], timeout=5000):
+            log_info("已填写卡号")
 
-    if not card_filled:
-        log_info("尝试通过 Stripe iframe 填写卡号...")
-        for frame in page.frames:
-            frame_url = frame.url
-            if "stripe.com" in frame_url:
-                try:
-                    card_input = frame.locator(
-                        'input[name="cardnumber"], input[name="cardNumber"]'
-                    ).first
-                    if card_input.is_visible(timeout=3000):
-                        card_input.fill(payment["cardNumber"])
-                        card_filled = True
-                        log_info("通过 iframe 填写了卡号")
-                        break
-                except Exception:
-                    continue
+    if payment.get("expiry"):
+        if safe_type(page, '#cardExpiry', payment["expiry"], timeout=3000):
+            log_info("已填写有效期")
 
-    if card_filled:
-        log_info("已填写卡号")
-    else:
-        log_info("无法自动填写卡号，请手动输入")
+    if payment.get("cvc"):
+        if safe_type(page, '#cardCvc', payment["cvc"], timeout=3000):
+            log_info("已填写 CVC")
 
-    # 有效期
-    if safe_fill(
-        page,
-        '#cardExpiry, input[name="cardExpiry"], input[autocomplete="cc-exp"]',
-        payment["expiry"],
-    ):
-        log_info("已填写有效期")
-
-    # CVC
-    if safe_fill(
-        page,
-        '#cardCvc, input[name="cardCvc"], input[autocomplete="cc-csc"]',
-        payment["cvc"],
-    ):
-        log_info("已填写 CVC")
-
-    # 持卡人姓名
     if payment.get("cardholderName"):
-        if safe_fill(
-            page,
-            '#billingName, input[name="billingName"], input[autocomplete="cc-name"]',
-            payment["cardholderName"],
-        ):
-            log_info(f"已填写持卡人姓名: {payment['cardholderName']}")
+        fill_full_name(page, payment["cardholderName"])
 
-    # 国家
-    if payment.get("country"):
-        try:
-            sel = page.locator(
-                '#billingCountry, select[name="billingCountry"]'
-            ).first
-            if sel.is_visible(timeout=3000):
-                sel.select_option(label=payment["country"])
-                log_info(f"已选择国家: {payment['country']}")
-        except Exception:
-            pass
+    select_country_us(page)
 
-    # 邮编
     if payment.get("postalCode"):
-        if safe_fill(
-            page,
-            '#billingPostalCode, input[name="billingPostalCode"], input[autocomplete="postal-code"]',
-            payment["postalCode"],
-        ):
-            log_info(f"已填写邮编: {payment['postalCode']}")
+        safe_type(page, '#billingPostalCode', payment["postalCode"], timeout=3000)
 
-    save_screenshot(page, "stripe-filled")
-    log(4, "支付信息填写完成")
-    return card_filled
+    check_terms(page)
+    save_screenshot(page, "card-billing-filled")
+    log(4, "信用卡信息填写完成")
 
 
-def submit_subscription(page, auto_submit: bool = False) -> bool:
-    """提交订阅"""
-    log(5, "准备提交订阅...")
+# ---------------------------------------------------------------------------
+# 步骤 6: 提交订阅
+# ---------------------------------------------------------------------------
+
+def submit_subscription(page, auto_submit):
+    log(5, "提交订阅...")
 
     if not auto_submit:
         print()
         print("╔══════════════════════════════════════════════════╗")
-        print("║        请检查支付信息是否正确                       ║")
-        print("║        30 秒后脚本将自动提交                       ║")
-        print("║        或设置 --auto-submit 跳过等待              ║")
+        print("║   请检查页面上的支付信息是否正确                    ║")
+        print("║   30 秒后自动提交                                ║")
         print("╚══════════════════════════════════════════════════╝")
         print()
         time.sleep(30)
 
     submit_selectors = [
+        'button[data-testid="submit-button"]',
+        'button[data-testid="hosted-payment-submit-button"]',
+        'button.SubmitButton--complete',
         'button:has-text("Subscribe")',
         'button:has-text("Pay")',
         'button:has-text("Start subscription")',
+        'button:has-text("Next")',
+        'button:has-text("Continue")',
         'button[type="submit"]',
-        ".SubmitButton",
     ]
 
     for sel in submit_selectors:
-        if safe_click(page, sel, timeout=3000):
-            log(5, f"已点击提交按钮")
-            page.wait_for_timeout(10000)
-            save_screenshot(page, "after-submit")
-            return True
+        try:
+            btn = page.locator(sel).first
+            if btn.is_visible(timeout=2000) and btn.is_enabled():
+                log_info(f"点击提交: {sel}")
+                btn.click()
+                log(5, "已提交订阅！")
+                page.wait_for_timeout(10000)
+                save_screenshot(page, "after-submit")
+                return True
+        except Exception:
+            continue
 
-    log_info("未找到提交按钮，请手动点击提交")
+    log_info("未找到提交按钮，请手动提交")
     save_screenshot(page, "no-submit-button")
     return False
 
 
-def verify_subscription(page) -> bool:
-    """验证订阅结果"""
+# ---------------------------------------------------------------------------
+# 辅助
+# ---------------------------------------------------------------------------
+
+def select_country_us(page):
+    for sel in ['#billingCountry', 'select[name="billingCountry"]']:
+        try:
+            el = page.locator(sel).first
+            if el.is_visible(timeout=3000):
+                el.select_option("US")
+                log_info("已选择国家: US")
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def fill_full_name(page, name):
+    for sel in ['#billingName', 'input[name="billingName"]']:
+        if safe_type(page, sel, name, timeout=3000):
+            log_info(f"已填写姓名: {name}")
+            return True
+    return False
+
+
+def check_terms(page):
+    try:
+        cb = page.locator('#termsOfServiceConsentCheckbox').first
+        if cb.is_visible(timeout=3000) and not cb.is_checked():
+            cb.click()
+            log_info("已勾选服务条款")
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# 步骤 7: 验证结果
+# ---------------------------------------------------------------------------
+
+def verify_subscription(page):
     log(6, "验证订阅结果...")
     page.wait_for_timeout(5000)
 
     url = page.url
     log_info(f"当前 URL: {url}")
 
-    if "chatgpt.com" in url:
-        log_info("已返回 ChatGPT 页面")
-
+    if "paypal.com" in url:
+        log_info("已跳转到 PayPal，请在 PayPal 中完成支付")
+        return "paypal_redirect"
     if "success" in url or "thank" in url:
         log(6, "支付成功！")
-        return True
+        return "success"
 
     save_screenshot(page, "verify-result")
-    log_info("请手动确认订阅是否成功")
-    return False
+    return "unknown"
 
 
 # ---------------------------------------------------------------------------
 # 主流程
 # ---------------------------------------------------------------------------
 
-
 def main():
-    parser = argparse.ArgumentParser(description="ChatGPT Plus 订阅自动化 (CDP)")
-    parser.add_argument(
-        "--cdp-url",
-        default="http://localhost:29229",
-        help="Chrome CDP 远程调试地址 (默认: http://localhost:29229)",
-    )
-    parser.add_argument(
-        "--config",
-        default=str(PROJECT_ROOT / "config.json"),
-        help="配置文件路径 (默认: config.json)",
-    )
-    parser.add_argument(
-        "--auto-submit",
-        action="store_true",
-        help="跳过确认直接提交支付",
-    )
+    parser = argparse.ArgumentParser(description="ChatGPT Plus 订阅自动化（GuJumpgate 方案）")
+    parser.add_argument("--cdp-url", default="http://localhost:29229", help="CDP 地址")
+    parser.add_argument("--config", default=None, help="配置文件路径")
+    parser.add_argument("--payment", choices=["paypal", "card"], default="paypal", help="支付方式")
+    parser.add_argument("--auto-submit", action="store_true", help="跳过确认等待")
     args = parser.parse_args()
 
     config = load_config(args.config)
-    payment = config["payment"]
 
     print("╔══════════════════════════════════════════════════╗")
-    print("║       ChatGPT Plus 订阅自动化工具 (CDP)           ║")
+    print("║    ChatGPT Plus 订阅自动化（GuJumpgate 方案）      ║")
     print("╚══════════════════════════════════════════════════╝")
     print()
     print(f"CDP 地址: {args.cdp_url}")
-    print(f"配置文件: {args.config}")
-    print(f"自动提交: {'是' if args.auto_submit else '否'}")
+    print(f"支付方式: {'PayPal（含免费试用 promo）' if args.payment == 'paypal' else '信用卡'}")
+    print(f"自动提交: {'是' if args.auto_submit else '否（等待30秒确认）'}")
     print()
 
-    with sync_playwright() as p:
-        log(0, f"连接浏览器: {args.cdp_url}")
-        browser = p.chromium.connect_over_cdp(args.cdp_url)
+    if args.payment == "paypal":
+        print(">>> PayPal 模式：使用 plus-1-month-free promo 获得免费试用")
+        print(">>> 首月 $0，之后 $20/月（可随时取消）")
+        print()
 
-        contexts = browser.contexts
-        context = contexts[0] if contexts else browser.new_context()
-        pages = context.pages
-        page = pages[0] if pages else context.new_page()
+    with sync_playwright() as pw:
+        browser, ctx, page = connect_browser(pw, args.cdp_url)
 
         try:
-            # 检查登录状态
-            if not check_login(page):
-                print()
-                print("请先在浏览器中登录 ChatGPT，然后重新运行此脚本。")
-                print("或使用 Node.js 版本（支持自动登录）:")
-                print("  node scripts/chatgpt-plus-subscribe.mjs")
-                sys.exit(1)
+            token = get_access_token(page)
+            checkout_info = create_checkout_session(page, token, args.payment)
+            open_checkout_page(page, checkout_info, args.payment)
 
-            # 导航到升级页面
-            navigate_to_upgrade(page)
+            if args.payment == "paypal":
+                handle_paypal_checkout(page, config)
+            else:
+                handle_card_checkout(page, config)
 
-            # 选择 Plus 计划
-            if not select_plus_plan(page):
-                print()
-                print("无法进入 Stripe Checkout。可能的原因：")
-                print("  1. 账号已经是 Plus 会员")
-                print("  2. 页面结构已变化")
-                print("  3. 需要额外验证")
-                save_screenshot(page, "checkout-failed")
-                sys.exit(1)
+            submitted = submit_subscription(page, args.auto_submit)
 
-            # 填写支付信息
-            fill_stripe_checkout(page, payment)
-
-            # 提交订阅
-            submitted = submit_subscription(page, auto_submit=args.auto_submit)
-
-            # 验证结果
             if submitted:
-                verify_subscription(page)
+                result = verify_subscription(page)
+                if result == "paypal_redirect":
+                    log_info("等待 PayPal 支付完成...")
+                    try:
+                        page.wait_for_url(lambda u: "paypal.com" not in u, timeout=600000)
+                        verify_subscription(page)
+                    except Exception:
+                        log_info("PayPal 支付超时，请手动完成")
 
             print()
             print("═══════════════════════════════════════════════════")
             print("  流程结束。请检查浏览器确认订阅状态。")
             print("═══════════════════════════════════════════════════")
-            print()
 
         except Exception as e:
             print(f"\n订阅过程中出错: {e}")
             save_screenshot(page, "error")
-            raise
+            sys.exit(1)
 
 
 if __name__ == "__main__":
