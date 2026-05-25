@@ -8,5 +8,7 @@ build/
 .idea/
 node_modules/
 config.json
+sms-instructions.json
 *.log
 screenshots/
+accounts/
