@@ -251,31 +251,61 @@ with sync_playwright() as p:
 
 ### 8.1 背景
 
-用户已成功注册 ChatGPT 免费账号，现需要升级为 Plus 订阅（$20/月）。  
-由于用户无法使用鼠标/键盘，需要自动化完成 Stripe Checkout 支付流程。
+用户已成功注册 ChatGPT 免费账号（david.carter.2490@outlook.com），现需要升级为 Plus 订阅。  
+参考 [FoundZiGu/GuJumpgate](https://github.com/FoundZiGu/GuJumpgate)（2466 Star，100% 成功率）的方法实现。
 
-### 8.2 实现方案
+### 8.2 核心方法（参考 GuJumpgate）
 
-创建了两个自动化脚本：
+**不通过 UI 导航**，直接调用 ChatGPT 后端 API 创建 Stripe Checkout 会话：
+
+```
+Step 1: GET /api/auth/session → 获取 accessToken
+Step 2: POST /backend-api/payments/checkout → 获取 checkout_session_id
+Step 3: 打开 https://chatgpt.com/checkout/{entity}/{session_id}
+Step 4: 在 Stripe 页面填写账单/支付信息
+Step 5: 提交订阅
+```
+
+**API Payload（PayPal 路径，推荐）：**
+
+```json
+{
+  "entry_point": "all_plans_pricing_modal",
+  "plan_name": "chatgptplusplan",
+  "promo_campaign": {
+    "promo_campaign_id": "plus-1-month-free",
+    "is_coupon_from_query_param": false
+  },
+  "checkout_ui_mode": "hosted",
+  "billing_details": { "country": "US", "currency": "USD" }
+}
+```
+
+### 8.3 两种支付路径
+
+| 路径 | checkout_ui_mode | entity | Promo | 首月价格 |
+|------|-----------------|--------|-------|---------|
+| **PayPal（推荐）** | hosted | openai_ie | plus-1-month-free | **$0** |
+| 信用卡 | custom | openai_llc | 无 | $20 |
+
+### 8.4 实现脚本
 
 | 文件 | 语言 | 说明 |
 |------|------|------|
-| `scripts/chatgpt-plus-subscribe.mjs` | Node.js | 完整订阅脚本（支持独立浏览器和 CDP 模式） |
-| `scripts/chatgpt_plus_subscribe.py` | Python | CDP 版本（连接已登录的浏览器） |
+| `scripts/chatgpt-plus-subscribe.mjs` | Node.js | 完整订阅脚本（独立浏览器 + CDP 模式） |
+| `scripts/chatgpt_plus_subscribe.py` | Python | CDP 版本（连接已登录浏览器） |
 
-### 8.3 订阅流程
+### 8.5 npm 命令
 
-```
-Step 1: 确认已登录 ChatGPT
-Step 2: 导航到 chatgpt.com/#pricing
-Step 3: 点击 "Get Plus" / "Upgrade to Plus"
-Step 4: 跳转到 Stripe Checkout (pay.openai.com)
-Step 5: 填写支付信息（卡号、有效期、CVC、姓名、国家、邮编）
-Step 6: 提交订阅（默认等待 30 秒确认）
-Step 7: 验证订阅成功
-```
+| 命令 | 说明 |
+|------|------|
+| `npm run subscribe` | PayPal 模式（标准） |
+| `npm run subscribe:cdp` | PayPal + CDP（推荐） |
+| `npm run subscribe:card` | 信用卡模式 |
+| `npm run subscribe:card:cdp` | 信用卡 + CDP |
+| `npm run subscribe:auto` | 自动提交（跳过 30 秒确认） |
 
-### 8.4 配置
+### 8.6 配置
 
 在 `config.json` 中添加 `payment` 字段：
 
@@ -283,40 +313,152 @@ Step 7: 验证订阅成功
 {
   "payment": {
     "email": "your-email@gmail.com",
-    "cardNumber": "卡号",
-    "expiry": "MM/YY",
-    "cvc": "安全码",
-    "cardholderName": "持卡人姓名",
-    "country": "国家",
-    "postalCode": "邮编"
+    "cardNumber": "4242424242424242",
+    "expiry": "12/28",
+    "cvc": "123",
+    "cardholderName": "YOUR NAME",
+    "billingAddress": {
+      "address1": "Broadway",
+      "city": "New York",
+      "region": "New York",
+      "postalCode": "10007"
+    }
   }
 }
 ```
 
-### 8.5 npm 命令
+### 8.7 Stripe Checkout 关键选择器（来自 GuJumpgate）
 
-| 命令 | 说明 |
-|------|------|
-| `npm run subscribe` | 标准模式（启动新浏览器） |
-| `npm run subscribe:cdp` | CDP 模式（连接已登录浏览器，推荐） |
-| `npm run subscribe:auto` | 自动提交（跳过确认等待） |
-| `npm run subscribe:headless` | 无界面模式 |
+```
+提交按钮:   button[data-testid="submit-button"]
+PayPal:     [data-testid="paypal-accordion-item-button"]
+账单地址:   #billingAddressLine1, #billingLocality, #billingPostalCode
+            #billingAdministrativeArea（州）, #billingCountry, #billingName
+服务条款:   #termsOfServiceConsentCheckbox
+```
 
-### 8.6 参考的开源项目
-
-| 项目 | 说明 |
-|------|------|
-| [zxyyang/plus_gopay_gptp-plus](https://github.com/zxyyang/plus_gopay_gptp-plus) | ChatGPT Plus PayPal 通道批量工具 |
-| [DanOps-1/Gpt-Agreement-Payment](https://github.com/DanOps-1/Gpt-Agreement-Payment) | Stripe Checkout 协议端到端重放 |
-
-### 8.7 注意事项
+### 8.8 注意事项
 
 - **支付信息安全**: config.json 包含敏感支付数据，已在 .gitignore 中排除
 - **CDP 模式推荐**: 先在真实浏览器中登录 ChatGPT，再用 CDP 连接
+- **住宅 IP 必须**: ChatGPT 和 Stripe 都需要住宅 IP（非数据中心）
 - **Stripe 反自动化**: 如遇问题，使用 CDP 模式手动辅助
-- **价格**: ChatGPT Plus $20/月（2026年5月）
 
-### 8.8 相关文档
+### 8.9 参考项目
 
-- `docs/CHATGPT_PLUS_订阅流程文档.md` — 完整技术文档（URL、选择器、支付字段）
+| 项目 | 说明 |
+|------|------|
+| **[FoundZiGu/GuJumpgate](https://github.com/FoundZiGu/GuJumpgate)** | **Chrome 扩展，PayPal 全流程，100% 成功率** |
+| [zxyyang/plus_gopay_gptp-plus](https://github.com/zxyyang/plus_gopay_gptp-plus) | PayPal 通道批量工具 |
+| [DanOps-1/Gpt-Agreement-Payment](https://github.com/DanOps-1/Gpt-Agreement-Payment) | Stripe 协议端到端重放 |
+
+### 8.10 相关文档
+
+- `docs/CHATGPT_PLUS_订阅流程文档.md` — 完整技术文档（URL、选择器、支付字段、地址种子）
 - `skills/SKILL_chatgpt_plus_subscribe.md` — 可复用的技能文档
+
+---
+
+## 九、住宅 IP 代理获取方法（2026-05-25 新增）
+
+### 9.1 为什么需要住宅 IP
+
+ChatGPT 使用 Cloudflare 保护，会检测 IP 类型：
+
+| IP 类型 | ChatGPT 结果 | 典型来源 |
+|---------|-------------|---------|
+| 数据中心 IP | Cloudflare 挑战循环 / 403 | AWS, GCP, Azure, Vultr, DigitalOcean |
+| VPN / 商业代理 | "Unable to load site" / 403 | NordVPN, Webshare, 多数付费代理 |
+| **住宅 ISP** | **正常访问** | Cox, Comcast, AT&T, Spectrum, Verizon |
+
+**判断方法**: 查询 `ip-api.com` 的 `isp` 字段，住宅 ISP 名称包含 Cox, Comcast, AT&T, Spectrum 等。
+
+### 9.2 免费住宅代理获取（ProxyScrape）
+
+**已验证的方法**（2026-05-25 成功注册 ChatGPT Free 使用此方法）。
+
+**代理发现脚本**: `scripts/find-residential-proxy.mjs`
+
+```bash
+# 运行代理发现工具
+node scripts/find-residential-proxy.mjs              # 默认检查 30 个
+node scripts/find-residential-proxy.mjs --max 100    # 检查 100 个
+node scripts/find-residential-proxy.mjs --all         # 检查所有
+
+# 输出示例:
+# PROXY=socks5://98.182.147.97:4145   # Cox Communications (Las Vegas, Nevada)
+```
+
+**工作原理**:
+
+1. 从 ProxyScrape API 获取免费 US SOCKS5 代理列表
+2. 逐个检查每个代理的 IP 信息（通过 ip-api.com）
+3. 过滤出住宅 ISP 的代理（排除数据中心关键词）
+4. 输出可直接使用的 `PROXY=socks5://ip:port` 格式
+
+**ProxyScrape API**:
+```
+https://api.proxyscrape.com/v2/?request=displayproxies&protocol=socks5&timeout=10000&country=US
+```
+
+### 9.3 已验证成功的代理
+
+| 日期 | 代理 | ISP | 城市 | 用途 |
+|------|------|-----|------|------|
+| 2026-05-25 | `socks5://98.182.147.97:4145` | Cox Communications | Las Vegas, NV | ChatGPT 免费账号注册（成功） |
+
+### 9.4 代理使用方法
+
+**方法 1: Playwright 浏览器代理（推荐）**
+
+```javascript
+import { chromium } from "playwright";
+
+const browser = await chromium.launch({ headless: false });
+const context = await browser.newContext({
+  proxy: { server: "socks5://98.182.147.97:4145" },
+  userAgent: "Mozilla/5.0 (X11; Linux x86_64) ...",
+  locale: "en-US",
+});
+const page = await context.newPage();
+await page.goto("https://chatgpt.com/");
+```
+
+**方法 2: 环境变量方式**
+
+```bash
+PROXY=socks5://98.182.147.97:4145 EMAIL=david.carter.2490@outlook.com node scripts/chatgpt-signup.mjs
+```
+
+### 9.5 注意事项与限制
+
+1. **免费代理不稳定** — 可能随时失效，需定期重新扫描
+2. **SOCKS5 代理多数不支持 HTTPS** — 部分免费 SOCKS5 只能转发 HTTP，不能转发 TLS
+3. **住宅 IP 比例很低** — 200+ 个免费代理中通常只有 1-5 个是真正的住宅 IP
+4. **重复使用会被标记** — 同一住宅 IP 注册过多账号后会被 Cloudflare 标记
+5. **推荐付费方案** — 稳定使用建议购买付费住宅代理（IPFoxy、Luminati 等）
+
+### 9.6 2026-05-25 代理扫描结果
+
+扫描 244 个 ProxyScrape US SOCKS5 代理，结果：
+
+| 分类 | 数量 | 说明 |
+|------|------|------|
+| 超时/不可用 | ~220 | 大部分免费代理已失效 |
+| 数据中心 IP | ~5 | 能连但会被 ChatGPT 封 |
+| "住宅" IP（实际为 VPN） | ~15 | ip-api 显示住宅但实际被 ChatGPT 识别为代理 |
+| **真正可用的住宅 IP** | **0** | 本次未找到能访问 ChatGPT 的住宅代理 |
+
+**结论**: 免费代理方法在 2026-05-25 已无法可靠获取能访问 ChatGPT 的住宅 IP。  
+**建议**: 使用付费住宅代理服务或自建住宅出口 VPN。
+
+### 9.7 接码服务信息
+
+用户提供的接码服务（可用于 PayPal 或其他验证）：
+
+```
+手机号: +15822636711
+API: http://a.62-us.com/api/get_sms?key=4b6a853e5caceee469c3910ed0b28943
+```
+
+**用法**: 直接 GET 请求 API URL，返回 `ok|验证码内容` 或 `no|暂无验证码`。

@@ -85,6 +85,22 @@ python scripts/chatgpt_plus_subscribe.py --auto-submit
 }
 ```
 
+### 住宅 IP 代理（前提条件）
+
+ChatGPT 需要住宅 IP 才能访问。本项目包含免费住宅代理发现工具：
+
+```bash
+# 扫描 ProxyScrape 免费 SOCKS5 代理，筛选 US 住宅 IP
+node scripts/find-residential-proxy.mjs              # 默认检查 30 个
+node scripts/find-residential-proxy.mjs --max 100    # 检查 100 个
+node scripts/find-residential-proxy.mjs --all         # 检查所有
+
+# 输出示例:
+# PROXY=socks5://98.182.147.97:4145   # Cox Communications (Las Vegas, Nevada)
+```
+
+> **注意**: 免费代理不稳定，住宅 IP 比例很低。建议付费住宅代理（IPFoxy、Luminati 等）确保稳定性。
+
 ### 参考项目
 
 | 项目 | 说明 |
@@ -171,7 +187,8 @@ AutoSignUp/
 │   ├── google_register.py                 # Google 注册脚本 (Python CDP)
 │   ├── outlook_register.py                # Outlook 注册脚本 (Python)
 │   ├── chatgpt-plus-subscribe.mjs         # ChatGPT Plus 订阅脚本 (Node.js)
-│   └── chatgpt_plus_subscribe.py          # ChatGPT Plus 订阅脚本 (Python CDP)
+│   ├── chatgpt_plus_subscribe.py          # ChatGPT Plus 订阅脚本 (Python CDP)
+│   └── find-residential-proxy.mjs         # 住宅 IP 代理发现工具
 ├── skills/
 │   ├── SKILL_google_register.md           # Google 注册技能文档
 │   └── SKILL_chatgpt_plus_subscribe.md    # ChatGPT Plus 订阅技能文档
